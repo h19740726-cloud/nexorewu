@@ -1,7 +1,7 @@
 # Work State
 
 Last updated: 2026-10-13 Asia/Taipei
-Revision: 2
+Revision: 3
 Phase: verification
 Objective: Build a durable decision-memory workflow and an independently signed completion receipt protocol for T02.
 
@@ -32,19 +32,21 @@ Objective: Build a durable decision-memory workflow and an independently signed 
 - Created and independently tested the personal `verified-workflow-memory` Skill.
 - Implemented the minimal RSA-SHA256 signed-receipt verifier and replay guard.
 - Added regression tests and a GitHub Actions test workflow.
+- Published pull request #1.
 
 ## Verification evidence
 
 - Skill structure validation and independent forward test passed in the originating Codex task.
 - Local `python3 -m unittest -v` and bytecode compilation passed.
+- GitHub Actions run 38359387120 completed successfully.
 
 ## Current work
 
-- Publish the verified implementation to `nexorewu` through a review branch.
+- Await an independent signing identity and the original T02 Stop hook source for integration.
 
 ## Next action
 
-- Publish a pull request and confirm GitHub Actions.
+- Configure the external signer and patch the real T02 Stop hook to call this verifier with a protected public key.
 
 ## Blockers or unresolved decisions
 
@@ -55,5 +57,5 @@ Objective: Build a durable decision-memory workflow and an independently signed 
 
 - [x] Forged, modified, expired, incomplete, or replayed receipts fail locally.
 - [x] A valid receipt binds the task, result, ledger, and full pending ID set locally.
-- [ ] Tests pass in GitHub Actions.
+- [x] Tests pass in GitHub Actions.
 - [ ] Final PASS remains unavailable until an independent signer is configured and the real T02 hook calls this verifier.
