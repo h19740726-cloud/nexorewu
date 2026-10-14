@@ -103,6 +103,7 @@ MUTATIONS = [
             "test_r15_j_same_file_different_edit_cannot_mask_failure",
             "test_r15_l_write_content_mismatch_is_blocked",
             "test_r15_m_edit_without_content_fields_is_unverified",
+            "test_r18_c5_end_to_end_real_project_and_transcript",
         ],
     ),
     (
