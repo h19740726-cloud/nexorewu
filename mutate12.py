@@ -88,6 +88,22 @@ MUTATIONS = [
         "    # 已有同卡的 open pending → 只更新它（累加次數），不新增第二筆。\n    if False and card_id:",
         ["test_r12_d3_same_card_keeps_single_pending"],
     ),
+    (
+        "M10_behavior_defense_disabled",
+        "    mutation_problems, mutation_summary = review_mutations(turn_rows)",
+        "    mutation_problems, mutation_summary = [], []",
+        [
+            "test_r15_a_failed_edit_with_fabricated_completion_is_blocked",
+            "test_r15_b_failed_a_success_b_still_blocked",
+            "test_r15_d_completed_without_artifact_is_blocked",
+            "test_r15_e_existing_file_alone_is_not_evidence",
+            "test_r15_f_edit_without_result_is_blocked",
+            "test_r15_i_completed_but_file_unchanged_is_blocked",
+            "test_r15_j_same_file_different_edit_cannot_mask_failure",
+            "test_r15_l_write_content_mismatch_is_blocked",
+            "test_r15_m_edit_without_content_fields_is_unverified",
+        ],
+    ),
 ]
 
 

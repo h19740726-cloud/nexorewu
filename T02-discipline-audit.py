@@ -1052,6 +1052,164 @@ def inspect_turn(rows: list[dict]) -> tuple[set[str], list[str], int | None, int
     return completed, tools, first_mutation, first_response, completion_index
 
 
+def mutation_fingerprint(tool: str, arguments: dict) -> str:
+    """操作內容指紋：**同一（工具、目標、內容）** 才算同一次操作。
+
+    🔴 第 16 輪（對應 Codex 2026-10-14 補充）：同一檔案上的**不同編輯內容**
+    不能互相冒充重試。`Edit(old=X→new=Y)` 失敗後，`Edit(old=P→new=Q)` 成功，
+    不得拿來解除前者的失敗。
+    """
+    if tool == "Write":
+        payload: object = {"content": str(arguments.get("content") or "")}
+    elif tool == "Edit":
+        payload = {
+            "old_string": str(arguments.get("old_string") or ""),
+            "new_string": str(arguments.get("new_string") or ""),
+        }
+    elif tool == "MultiEdit":
+        payload = {"edits": arguments.get("edits")}
+    else:
+        payload = {"arguments": arguments}
+    return hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()[:16]
+
+
+def verify_mutation_effect(tool: str, arguments: dict, target: str) -> str:
+    """核對「操作內容」與「實際產物狀態」是否相符。回 "" 表相符；否則回原因。
+
+    🔴 第 16 輪（對應 Codex 2026-10-14 補充）：**不能只驗「檔案存在」**。
+      - `Write`：檔案目前內容必須等於 `content`。
+      - `Edit`：`new_string` 必須已出現在檔案中；若 `old_string` 有給且與 `new_string`
+        不同，`old_string` 不得仍留在檔案中（代表替換沒生效）。
+      - 取不到可核對的欄位（沒有 `content`／`new_string`）→ **明示「未驗證」**，不自動放行。
+      - 不支援的工具（`MultiEdit`／`NotebookEdit`）→ 一律「未驗證」。
+
+    ⚠️ 措辭紀律：這裡證明的是「**產物狀態與操作內容相符**」，
+    不等於「證明工具真的寫入了檔案」；回報時不得寫成「實際寫入證據」。
+    """
+    path = Path(target)
+    check = path if path.is_absolute() else Path.cwd() / path
+    try:
+        current = check.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return "產物不存在或無法讀取"
+    if tool == "Write":
+        content = arguments.get("content")
+        if not isinstance(content, str) or not content:
+            return "Write 沒有可核對的 content，操作效果未驗證"
+        if current != content:
+            return "檔案內容與 Write 的 content 不符，操作效果未驗證"
+        return ""
+    if tool == "Edit":
+        new_string = arguments.get("new_string")
+        old_string = arguments.get("old_string")
+        if not isinstance(new_string, str) or not new_string:
+            return "Edit 沒有可核對的 new_string，操作效果未驗證"
+        if new_string not in current:
+            return "檔案內容不含 Edit 的 new_string，操作效果未驗證"
+        if (
+            isinstance(old_string, str)
+            and old_string
+            and old_string != new_string
+            and old_string in current
+        ):
+            return "Edit 的 old_string 仍在檔案中，替換未生效"
+        return ""
+    return f"不支援的工具效果核對，操作效果未驗證：{tool}"
+
+
+def review_mutations(turn_rows: list[dict]) -> tuple[list[str], list[dict]]:
+    """檢視本輪的修改操作，回 (問題清單, 每個目標的摘要)。
+
+    🔴 第 15／16 輪（對應 Codex 2026-10-14 仲裁與補充）：
+    以 **（工具，目標，操作內容）** 為單位判定，只有「該單位**最後一次**操作
+    成功**且效果核對相符**」才算完成。
+
+      - **不得互相掩蓋**：任何一個單位未恢復的失敗，都不得用其他單位的成功抵銷
+        （A 失敗 ＋ B 成功 → 仍拒絕）。
+      - **有效重試**：同一（工具，目標，**同一編輯內容**）「先失敗、後成功」→ 視為已修復。
+      - **同檔不同內容不得冒充重試**：`Edit(old=X→new=Y)` 失敗後，
+        `Edit(old=P→new=Q)` 成功**不能**解除前者的失敗（分組鍵含內容指紋）。
+      - **缺結果**：有修改呼叫卻沒有對應結果列 → 保守視為未成功。
+      - **效果核對**（本輪即做）：成功的那一次必須有 `file_path`、結果必須有內容，
+        且**產物狀態與操作內容相符**（見 `verify_mutation_effect`）。
+        ⇒ 「檔案本來就存在」或「其他編輯已改過」都不構成證據
+        （反例：`completed` 但原檔內容仍舊 → 拒絕）。
+      - **未驗證即拒絕**：取不到可核對的欄位（缺 `content`／`new_string`）→ 不得自動放行。
+      - **純唯讀**（本輪沒有任何修改呼叫）→ 不觸發本防線。
+
+    範圍刻意保持最小：只比對「工具、目標、內容指紋、結果狀態、結果是否為空、
+    產物狀態是否與內容相符」，不做語義裁判、不推測工具意圖。
+    """
+    calls: list[dict] = []
+    results: dict[str, dict] = {}
+    for row in turn_rows:
+        row_type = row.get("type")
+        if row_type == "function_call":
+            name = row.get("name")
+            if name in MUTATING_TOOLS:
+                arguments = parse_arguments(row)
+                target = arguments.get("file_path") or arguments.get("path") or ""
+                calls.append(
+                    {
+                        "cid": call_id(row),
+                        "tool": str(name),
+                        "target": str(target),
+                        "arguments": arguments,
+                        "fingerprint": mutation_fingerprint(str(name), arguments),
+                        "order": len(calls),
+                    }
+                )
+        elif row_type == "function_call_result":
+            output = row.get("output")
+            if isinstance(output, dict):
+                text = output.get("text")
+            else:
+                text = output
+            results[call_id(row)] = {
+                "status": str(row.get("status") or ""),
+                "output": text if isinstance(text, str) else "",
+            }
+
+    # 🔴 分組鍵加入「操作內容指紋」：同一檔案上的**不同編輯內容**不得互相冒充重試。
+    latest: dict[tuple[str, str, str], dict] = {}
+    for record in calls:
+        key = (record["tool"], record["target"], record["fingerprint"])
+        if key not in latest or record["order"] > latest[key]["order"]:
+            latest[key] = record
+
+    problems: list[str] = []
+    summary: list[dict] = []
+    for record in sorted(latest.values(), key=lambda item: item["order"]):
+        label = f"{record['tool']}（{record['target'] or '未指定目標'}）"
+        outcome = results.get(record["cid"])
+        if outcome is None:
+            summary.append({"target": label, "status": "no_result"})
+            problems.append(f"修改操作未回報結果，無法證明成功：{label}")
+            continue
+        if outcome["status"] != "completed":
+            summary.append({"target": label, "status": outcome["status"] or "empty"})
+            problems.append(f"修改操作未成功（status={outcome['status'] or '空'}）：{label}")
+            continue
+        if not record["target"]:
+            summary.append({"target": label, "status": "no_target"})
+            problems.append(f"修改操作成功，但沒有可驗證的產物路徑：{label}")
+            continue
+        if not outcome["output"].strip():
+            summary.append({"target": label, "status": "empty_output"})
+            problems.append(f"修改操作成功，但結果沒有內容，證據不足：{label}")
+            continue
+        # 🔴 第 16 輪（Codex 補充）：核對「操作內容」與「產物實際狀態」，不能只驗檔案存在。
+        effect = verify_mutation_effect(record["tool"], record["arguments"], record["target"])
+        if effect:
+            summary.append({"target": label, "status": "effect_unverified"})
+            problems.append(f"{effect}：{label}")
+            continue
+        summary.append({"target": label, "status": "effect_matches"})
+    return problems, summary
+
+
 # ---------------------------------------------------------------- 稽核主流程
 
 def base_record(event: dict) -> dict:
@@ -1173,6 +1331,11 @@ def main() -> int:
         reasons.append("缺少已完成的 Skill 載入：" + "、".join(missing))
     if late:
         reasons.append("Skill 晚於第一則回覆或第一個修改工具：" + "、".join(late))
+
+    # 🔴 第 15 輪（行為防線，對應 Codex 2026-10-14 仲裁）：
+    #    本輪若有修改操作，必須有一次「成功且產物存在」的證據，否則不得宣告完成。
+    mutation_problems, mutation_summary = review_mutations(turn_rows)
+    reasons.extend(mutation_problems)
 
     # 🔴 驗收第 1、2 條：取不到卡號或來源損壞 → **一律**結構化拒絕完成（無條件）。
     if not resolved_card:

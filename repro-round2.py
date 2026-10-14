@@ -150,16 +150,21 @@ def main() -> int:
                         f"first_rc={ok.returncode} replay_rc={a2.returncode}"))
 
         # ---- A3：合法清除後，改指防重放狀態路徑再重放 ----
-        stop_once(root, audit, "T02", "session-2")
-        v3 = write_verdict(root, "T02", version, "a3-verdict.md")
-        r3 = root / "a3-receipt.json"
-        sign(priv, "T02", version, v3, r3, root)
+        # 🔴 用**獨立 root**：A2 已刻意刪除防重放存放區，沿用同一 root 會讓 A3 的
+        #    「首次合法清除」無法建立存放區（新版保守設計），屬 fixture 缺陷而非防線失效。
+        root3 = root / "a3"
+        (root3 / "tasks").mkdir(parents=True, exist_ok=True)
+        (root3 / "tasks" / "T02-x.md").write_text("# 測試卡\n", encoding="utf-8")
+        stop_once(root3, audit, "T02", "session-3")
+        v3 = write_verdict(root3, "T02", version, "a3-verdict.md")
+        r3 = root3 / "a3-receipt.json"
+        sign(priv, "T02", version, v3, r3, root3)
         ok3 = run([PY, str(audit), "--clear", "T02", "--result", str(v3),
                    "--version", version, "--by", "codex", "--receipt", str(r3)],
-                  env=env_for(root))
+                  env=env_for(root3))
         a3 = run([PY, str(audit), "--clear", "T02", "--result", str(v3),
                   "--version", version, "--by", "codex", "--receipt", str(r3)],
-                 env=env_for(root, {"T02_NONCE_PATH": str(root / "redirected.json")}))
+                 env=env_for(root3, {"T02_NONCE_PATH": str(root3 / "redirected.json")}))
         results.append(("A3 改指防重放路徑後重放被拒",
                         ok3.returncode == 0 and a3.returncode != 0,
                         f"first_rc={ok3.returncode} replay_rc={a3.returncode}"))

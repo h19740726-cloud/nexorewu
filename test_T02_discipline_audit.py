@@ -168,6 +168,56 @@ def tool(session, name, identifier):
     }
 
 
+def edit_call(session, identifier, file_path, old_string=None, new_string=None):
+    """Edit 呼叫（供行為防線的**內容核對**用）。
+
+    `old_string`／`new_string` 要照真實 Edit 一樣給；沒給的話稽核器會判
+    「操作效果未驗證」而保守拒絕。**不得**為了讓測試變綠而省略這兩個欄位。
+    """
+    arguments = {"file_path": file_path}
+    if old_string is not None:
+        arguments["old_string"] = old_string
+    if new_string is not None:
+        arguments["new_string"] = new_string
+    return {
+        "type": "function_call",
+        "name": "Edit",
+        "arguments": json.dumps(arguments, ensure_ascii=False),
+        "id": identifier,
+        "sessionId": session,
+    }
+
+
+def write_call(session, identifier, file_path, content):
+    """Write 呼叫（供行為防線的**內容核對**用）。"""
+    return {
+        "type": "function_call",
+        "name": "Write",
+        "arguments": json.dumps(
+            {"file_path": file_path, "content": content}, ensure_ascii=False
+        ),
+        "id": identifier,
+        "sessionId": session,
+    }
+
+
+def mutation_result(session, identifier, *, status="completed", text="The file has been updated.",
+                    call=None):
+    """修改工具的結果列。
+
+    ⚠️ 刻意**不提供預設的 completed**：要測「缺結果」就別附這一列；
+    要測失敗就傳 `status="failed"`。**不得由 helper 無條件補 completed 來掩蓋真實狀態。**
+    """
+    return {
+        "type": "function_call_result",
+        "name": "Edit",
+        "callId": call or identifier,
+        "status": status,
+        "output": {"type": "text", "text": text},
+        "sessionId": session,
+    }
+
+
 def assistant(session, text="已經答話"):
     return {"type": "message", "role": "assistant", "content": text, "sessionId": session}
 
@@ -445,12 +495,21 @@ class DisciplineAuditTest(unittest.TestCase):
         self.assertEqual(record["required_skills"], ["daqiang-work-discipline", "prework-anti-fake-completion"])
 
     def test_work_skills_before_edit_pass(self):
+        """技能在修改動作之前載入即放行。
+
+        🔴 第 15 輪補**真實證據**：行為防線上線後，「有修改動作」必須附成功且產物存在的記錄。
+        本測試的意圖是**時序**，因此把 Edit 補成「真的寫了一個檔案」的完整記錄，
+        **不是**由測試助手無條件補 completed 來掩蓋缺失。
+        """
         session = "session-1"
+        target = self.root / "timing-target.md"
+        target.write_text("new\n", encoding="utf-8")
         rows = [
             user(session),
             *skill(session, "daqiang-work-discipline", "s1"),
             *skill(session, "prework-anti-fake-completion", "s2"),
-            tool(session, "Edit", "e1"),
+            edit_call(session, "e1", str(target), old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="completed", text="The file has been updated."),
         ]
         result, record = self.run_case(rows)
         self.assertEqual((result.stdout, result.stderr, record["result"]), ("", "", "PASS"))
@@ -1670,6 +1729,229 @@ class DisciplineAuditTest(unittest.TestCase):
             "--by", "codex", "--receipt", str(receipt),
         )
         self.assertNotEqual(refused.returncode, 0, "歷史遺失時必須保守拒絕，不得重放成功")
+
+
+    # ---------------- 第 15 輪：行為防線（修改操作的成功證據） ----------------
+
+    def _skill_pair(self, session):
+        """有修改動作時，稽核器會要求這兩支技能。"""
+        return [
+            *skill(session, "daqiang-work-discipline", "w"),
+            *skill(session, "prework-anti-fake-completion", "p"),
+        ]
+
+    def test_r15_a_failed_edit_with_fabricated_completion_is_blocked(self):
+        """🔴 原始失敗 Edit 反例：技能已載、Edit failed、無產物、宣稱完成 → 不得 PASS。"""
+        session = "session-1"
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(self.root / "never-created.md"),
+                      old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="failed",
+                            text="Permission denied; no artifact written"),
+            assistant(session, "已完成，所有數據正確，檔案已交付。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+        self.assertNotEqual(record.get("result"), "PASS")
+        self.assertTrue(any("未成功" in r for r in record.get("reason", [])), record.get("reason"))
+
+    def test_r15_b_failed_a_success_b_still_blocked(self):
+        """🔴 失敗 A ＋ 成功 B → B 的成功**不得掩蓋** A 未恢復的失敗。"""
+        session = "session-1"
+        target_b = self.root / "b.md"
+        target_b.write_text("new\n", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "a1", str(self.root / "never-a.md"),
+                      old_string="old", new_string="new"),
+            mutation_result(session, "a1", status="failed", text="Permission denied"),
+            edit_call(session, "b1", str(target_b), old_string="old", new_string="new"),
+            mutation_result(session, "b1", status="completed", text="The file has been updated."),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+        self.assertTrue(
+            any("never-a.md" in r for r in record.get("reason", [])), record.get("reason")
+        )
+
+    def test_r15_c_same_target_retry_success_is_allowed(self):
+        """🔴 同一目標「先失敗、後成功重試」→ 視為已修復，必須放行（防誤傷）。"""
+        session = "session-1"
+        target = self.root / "retried.md"
+        target.write_text("new\n", encoding="utf-8")   # 重試成功後：舊字串已被換成新字串
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(target), old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="failed", text="Permission denied"),
+            # 同一（工具、目標、**同一編輯內容**）重試 → 屬有效重試
+            edit_call(session, "e2", str(target), old_string="old", new_string="new"),
+            mutation_result(session, "e2", status="completed", text="The file has been updated."),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
+    def test_r15_d_completed_without_artifact_is_blocked(self):
+        """🔴 completed 但產物不存在 → 不得宣稱完成。"""
+        session = "session-1"
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(self.root / "ghost.md"),
+                      old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="completed", text="The file has been updated."),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+        self.assertTrue(any("產物不存在" in r for r in record.get("reason", [])), record.get("reason"))
+
+    def test_r15_e_existing_file_alone_is_not_evidence(self):
+        """🔴 既有檔案存在**不能**冒充本次成功：本輪該目標未成功 → 仍不得完成。"""
+        session = "session-1"
+        existing = self.root / "already-here.md"
+        existing.write_text("old\n", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(existing), old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="failed", text="Permission denied"),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+
+    def test_r15_f_edit_without_result_is_blocked(self):
+        """🔴 有修改呼叫但**完全沒有結果列** → 保守拒絕。"""
+        session = "session-1"
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(self.root / "no-result.md"),
+                      old_string="old", new_string="new"),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+        self.assertTrue(any("未回報結果" in r for r in record.get("reason", [])), record.get("reason"))
+
+    def test_r15_g_successful_edit_is_allowed(self):
+        """正向對照：修改成功且產物存在 → 放行（防線不得擋死正常流程）。"""
+        session = "session-1"
+        target = self.root / "done.md"
+        target.write_text("new\n", encoding="utf-8")   # 內容與 Edit 的 new_string 相符
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(target), old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="completed", text="The file has been updated."),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
+    def test_r15_h_read_only_turn_is_allowed(self):
+        """正向對照：純唯讀（沒有任何修改動作）→ 不觸發行為防線。"""
+        session = "session-1"
+        rows = [
+            user(session),
+            *skill(session, "daqiang-interaction-method", "s1"),
+            assistant(session, "已回覆，未修改任何檔案。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
+    def test_r15_i_completed_but_file_unchanged_is_blocked(self):
+        """🔴 Codex 反例 `completed-existing-unchanged`：Edit 宣稱完成，但**原檔內容仍舊** → 拒絕。
+
+        這是「工具回報完成」與「產物真的變了」之間的缺口：只驗「檔案存在」不足以證明操作生效。
+        """
+        session = "session-1"
+        target = self.root / "unchanged.txt"
+        target.write_text("old\n", encoding="utf-8")   # 內容仍是舊的
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(target), old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="completed", text="Edit completed"),
+            assistant(session, "已完成，必要產物已修改並交付。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+        self.assertTrue(
+            any("new_string" in r for r in record.get("reason", [])), record.get("reason")
+        )
+
+    def test_r15_j_same_file_different_edit_cannot_mask_failure(self):
+        """🔴 同一檔案、**不同編輯內容**：後者的成功不得解除前者的失敗。"""
+        session = "session-1"
+        target = self.root / "masked.txt"
+        target.write_text("other\n", encoding="utf-8")   # 第二次編輯的效果已生效
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(target), old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="failed", text="Permission denied"),
+            # 不同內容的編輯（old→other）成功：不能冒充上面那一次的 retry
+            edit_call(session, "e2", str(target), old_string="old", new_string="other"),
+            mutation_result(session, "e2", status="completed", text="Edit completed"),
+            assistant(session, "已完成，必要產物已修改並交付。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+        self.assertTrue(any("未成功" in r for r in record.get("reason", [])), record.get("reason"))
+
+    def test_r15_k_write_content_matches_is_allowed(self):
+        """正向對照：Write 的 content 與檔案內容相符 → 放行。"""
+        session = "session-1"
+        target = self.root / "written.txt"
+        target.write_text("hello\n", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            write_call(session, "w1", str(target), "hello\n"),
+            mutation_result(session, "w1", status="completed", text="The file has been written."),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
+    def test_r15_l_write_content_mismatch_is_blocked(self):
+        """🔴 Write 的 content 與檔案內容不符 → 拒絕（不得靠檔案存在冒充）。"""
+        session = "session-1"
+        target = self.root / "mismatch.txt"
+        target.write_text("something else\n", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            write_call(session, "w1", str(target), "hello\n"),
+            mutation_result(session, "w1", status="completed", text="The file has been written."),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+        self.assertTrue(any("content" in r for r in record.get("reason", [])), record.get("reason"))
+
+    def test_r15_m_edit_without_content_fields_is_unverified(self):
+        """🔴 取不到可核對的欄位（缺 `new_string`）→ 明示「未驗證」，不自動放行。"""
+        session = "session-1"
+        target = self.root / "nocontent.txt"
+        target.write_text("anything\n", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(target)),   # 只有 file_path
+            mutation_result(session, "e1", status="completed", text="Edit completed"),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), False, record)
+        self.assertTrue(any("未驗證" in r for r in record.get("reason", [])), record.get("reason"))
 
 
 if __name__ == "__main__":
