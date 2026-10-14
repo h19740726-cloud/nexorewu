@@ -1,19 +1,28 @@
 #!/usr/bin/env python3
-"""T02 第 12 輪：反向突變。
+"""T02 第 14 輪：反向突變（**隔離副本版**）。
 
 原則（沿用第 4 輪教訓）：
   - 突變的單位＝**一條防線**，不是一行。
   - 突變後**必須有紅燈**才算有效；全綠就先假設是突變寫壞了。
   - 要「精準」：該紅的紅、不該紅的仍綠。
 
-每個突變都改**受驗腳本本體**（測試用的副本由它複製而來，故一併繼承突變）。
+🔴 第 14 輪（對應業主 2026-10-14 要求）：**只在隔離副本跑**。
+  整個過程把受驗程式與測試複製到暫存目錄，所有突變只作用在副本上；
+  正式受驗檔 `work/codex/T02-discipline-audit.py` **不會被寫入**，
+  收尾時比對前後 SHA256 作為「未被改寫」的收據。
+
+🔴 M8 於第 14 輪更新：`clear_pending()` 的結果檔檢查已由「全文包含 `task_id=` 字串」
+  改為 `parse_verdict_declaration()` 的**欄位等值核對**，舊突變字串已不存在；
+  本輪改為突變該解析函式的 task_id 取樣行。
 """
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import shutil
 import subprocess
 import sys
+import tempfile
 
 BASE = pathlib.Path("/Users/wulieqiang/AI協作/work/codex")
 AUDIT = BASE / "T02-discipline-audit.py"
@@ -69,8 +78,8 @@ MUTATIONS = [
     ),
     (
         "M8_stop_result_taskid_check",
-        '            elif f"task_id={key}" not in text:',
-        "            elif False:",
+        "    task_ids = TASK_ID_DECL_RE.findall(text)",
+        '    task_ids = ["test-card"]',
         ["test_r10_a7c_clear_requires_verdict_task_binding"],
     ),
     (
@@ -82,15 +91,15 @@ MUTATIONS = [
 ]
 
 
-def run_tests() -> tuple[int, list[str]]:
-    """跑全套測試，回 (returncode, 紅燈測試名清單)。
+def run_tests(workdir: pathlib.Path) -> tuple[int, list[str]]:
+    """在**隔離目錄**跑全套測試，回 (returncode, 紅燈測試名清單)。
 
     🔴 unittest 的 FAIL／ERROR 明細寫在 **stderr**，Ran／OK／FAILED 也在 stderr；
     一定要兩個流都讀（第 6 輪踩過的坑）。
     """
     proc = subprocess.run(
         ["/usr/bin/python3", "-m", "unittest", TESTMOD],
-        cwd=str(BASE),
+        cwd=str(workdir),
         capture_output=True,
         text=True,
         check=False,
@@ -109,25 +118,30 @@ def run_tests() -> tuple[int, list[str]]:
 
 def main() -> int:
     original = AUDIT.read_text(encoding="utf-8")
+    before_sha = hashlib.sha256(AUDIT.read_bytes()).hexdigest()
 
-    print("=== 基準（突變前）===")
-    rc, failures = run_tests()
-    print(f"rc={rc} 紅燈={failures}")
-    if rc != 0:
-        print("!! 基準不是全綠，先修基準再突變。中止。")
-        return 1
-
-    results = []
+    work = pathlib.Path(tempfile.mkdtemp(prefix="t02-mutation-"))
+    results: list[tuple[str, list[str], list[str], bool]] = []
     try:
+        target = work / "T02-discipline-audit.py"
+        shutil.copy2(AUDIT, target)
+        shutil.copy2(BASE / f"{TESTMOD}.py", work / f"{TESTMOD}.py")
+
+        print("=== 基準（突變前，隔離副本）===")
+        rc, failures = run_tests(work)
+        print(f"rc={rc} 紅燈={failures}")
+        if rc != 0:
+            print("!! 基準不是全綠，先修基準再突變。中止。")
+            return 1
+
         for name, old, new, expected in MUTATIONS:
             if old not in original:
                 print(f"\n=== {name} ===")
                 print(f"!! 找不到字串，突變無效：{old!r}")
                 results.append((name, expected, ["<字串未命中>"], False))
                 continue
-            mutated = original.replace(old, new, 1)
-            AUDIT.write_text(mutated, encoding="utf-8")
-            rc2, failures2 = run_tests()
+            target.write_text(original.replace(old, new, 1), encoding="utf-8")
+            rc2, failures2 = run_tests(work)
             got = set(failures2)
             exp = set(expected)
             precise = got == exp
@@ -136,20 +150,21 @@ def main() -> int:
             print(f"紅燈={sorted(got)}")
             print(f"期望={sorted(exp)}  ->  {'✅ 精準' if precise else '⚠️ 不精準'}")
             results.append((name, sorted(exp), sorted(got), precise))
+            target.write_text(original, encoding="utf-8")
+
+        print("\n=== 彙總 ===")
+        ok = 0
+        for name, exp, got, precise in results:
+            print(f"{'✅' if precise else '⚠️'} {name}: 期望={exp} 實得={got}")
+            ok += 1 if precise else 0
+        print(f"\n精準 {ok}/{len(results)}")
+
+        after_sha = hashlib.sha256(AUDIT.read_bytes()).hexdigest()
+        print(f"正式受驗檔未被寫入（前後 SHA256 相同）：{before_sha == after_sha}")
+        print(f"正式受驗檔 SHA256：{after_sha}")
+        return 0 if ok == len(results) else 1
     finally:
-        AUDIT.write_text(original, encoding="utf-8")
-
-    print("\n=== 彙總 ===")
-    ok = 0
-    for name, exp, got, precise in results:
-        print(f"{'✅' if precise else '⚠️'} {name}: 期望={exp} 實得={got}")
-        ok += 1 if precise else 0
-    print(f"\n精準 {ok}/{len(results)}")
-
-    # 還原驗證
-    restored = AUDIT.read_text(encoding="utf-8")
-    print("還原後與原稿逐位元相同：", restored == original)
-    return 0 if ok == len(results) else 1
+        shutil.rmtree(work, ignore_errors=True)
 
 
 if __name__ == "__main__":
