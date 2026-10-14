@@ -1605,6 +1605,73 @@ class DisciplineAuditTest(unittest.TestCase):
         self.assertNotEqual(codes[1], 0, f"第二個消費必須失敗（重放）：{[o.stderr for o in outs]}")
 
 
+    # ---------------- 第 14 輪：對應第 2 輪 A 組增補反例（N1／N2／N3） ----------------
+
+    def test_r14_n1_corrupt_initialization_marker_is_rejected(self):
+        """🔴 N1：防重放存放區的初始化標記**損壞** → 不得被視為就緒，清除一律拒絕。
+
+        反例：`.initialized` 內容寫成 `{broken`，舊版只驗 `is_file()` → 仍 ready → rc=0。
+        """
+        verdict, receipt = self._pending_after_stop()
+        marker = self.root / self.NONCE_DIR / ".initialized"
+        self.assertTrue(marker.exists(), "Stop 後應已建立防重放存放區")
+        marker.write_text("{broken", encoding="utf-8")
+        refused = self.run_cli(
+            "--clear", "test-card", "--result", str(verdict), "--version", script_version(),
+            "--by", "codex", "--receipt", str(receipt),
+        )
+        self.assertNotEqual(refused.returncode, 0, "初始化標記損壞時不得清除")
+        self.assertNotIn("Traceback", refused.stderr, refused.stderr)
+
+    def test_r14_n2_verdict_declared_version_must_match(self):
+        """🔴 N2：結果檔**宣告欄位**的版本必須等於執行檔 SHA；附錄出現正確 SHA 不算補足。
+
+        反例：marker 宣告 `version=wrong`，正確 SHA 只出現在內文 → 舊版全文包含檢查放行。
+        """
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        verdict = self.root / "v.md"
+        self.write_verdict(verdict, "test-card", "wrong")
+        with verdict.open("a", encoding="utf-8") as handle:
+            handle.write(f"appendix {script_version()}\n")
+        receipt = self.write_receipt(self.receipt_payload("test-card", result_path=verdict))
+        refused = self.run_cli(
+            "--clear", "test-card", "--result", str(verdict), "--version", script_version(),
+            "--by", "codex", "--receipt", str(receipt),
+        )
+        self.assertNotEqual(refused.returncode, 0, "錯的宣告版本不得靠附錄的正確 SHA 補足")
+
+    def test_r14_n2b_duplicate_verdict_declarations_are_rejected(self):
+        """🔴 N2 同族：通過宣告**不唯一**（重複）→ 一律拒絕。"""
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        verdict = self.root / "v.md"
+        self.write_verdict(verdict, "test-card", script_version())
+        with verdict.open("a", encoding="utf-8") as handle:
+            handle.write(f"<!-- T02-VERDICT: pass version={script_version()} -->\n")
+        receipt = self.write_receipt(self.receipt_payload("test-card", result_path=verdict))
+        refused = self.run_cli(
+            "--clear", "test-card", "--result", str(verdict), "--version", script_version(),
+            "--by", "codex", "--receipt", str(receipt),
+        )
+        self.assertNotEqual(refused.returncode, 0, "重複的通過宣告必須拒絕")
+
+    def test_r14_n3_lost_nonce_history_is_not_silently_reinitialized(self):
+        """🔴 N3：pending 已存在但防重放存放區遺失 → `mark_pending` 不得靜默重建後放行。"""
+        verdict, receipt = self._pending_after_stop()
+        store = self.root / self.NONCE_DIR
+        self.assertTrue(store.exists(), "Stop 後應已建立防重放存放區")
+        shutil.move(str(store), str(self.root / "nonce-backup"))
+        # 既有 open pending 再次被阻擋（同卡）→ mark_pending 不得重建存放區。
+        self.run_case(
+            [user("session-1", "u2"), tool("session-1", "Edit", "e2")], stop_hook_active=True
+        )
+        self.assertFalse(store.exists(), "既有 pending 存在時，不得由 mark_pending 重建防重放存放區")
+        refused = self.run_cli(
+            "--clear", "test-card", "--result", str(verdict), "--version", script_version(),
+            "--by", "codex", "--receipt", str(receipt),
+        )
+        self.assertNotEqual(refused.returncode, 0, "歷史遺失時必須保守拒絕，不得重放成功")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

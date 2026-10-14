@@ -128,9 +128,17 @@ INTERACTION = "daqiang-interaction-method"
 WORK = "daqiang-work-discipline"
 PREWORK = "prework-anti-fake-completion"
 
-# 驗收結果檔要宣告通過的機器可讀標記。格式約定：
-#   <!-- T02-VERDICT: pass version=<受驗版本 SHA256> -->
-VERDICT_MARKER = "T02-VERDICT: pass"
+# 驗收結果檔的機器可讀宣告。格式約定（**唯一且完整**）：
+#   task_id=<卡號>                                       （整行，恰好 1 行）
+#   <!-- T02-VERDICT: pass version=<受驗版本 SHA256> -->  （恰好 1 個，version 為 64 位十六進位）
+#
+# 🔴 第 14 輪（對應第 2 輪 A 組增補 §5-1）：由「全文包含字串」改為**解析欄位並等值核對**。
+#    病根：舊版用 `artifact_sha not in text`，於是「marker 宣告錯版本、但附錄／內文出現
+#    正確 SHA」仍會通過（反例 N2）。改為只認**宣告欄位本身**的值；重複／衝突宣告一律拒絕。
+VERDICT_DECL_RE = re.compile(
+    r"<!--\s*T02-VERDICT:\s*pass\s+version=([0-9a-fA-F]{64})\s*-->"
+)
+TASK_ID_DECL_RE = re.compile(r"^task_id=([A-Za-z0-9._:-]{1,64})[ \t]*$", re.MULTILINE)
 
 # pending（未完成）狀態存放位置。
 PENDING_PATH = Path(
@@ -199,6 +207,9 @@ def self_artifact_sha256() -> str:
 #         **外部持鑰**，不由本機檔案提供（第 2 輪 §5 第 4 條，已於報告列明）。
 NONCE_STORE_DIRNAME = "T02-used-receipt-nonces"
 NONCE_STORE_MARKER = ".initialized"
+# 🔴 第 14 輪（對應第 2 輪 A 組增補 §5-2）：初始化標記必須帶**固定內容**，
+#    只驗「檔案存在」不算就緒（反例 N1：`.initialized` 內容被寫成 `{broken` 仍被判 ready）。
+NONCE_STORE_MAGIC = "T02-nonce-store-v1"
 
 
 def canonical_payload(payload: dict) -> bytes:
@@ -307,27 +318,35 @@ def nonce_store_dir() -> Path:
 
 
 def init_nonce_store() -> bool:
-    """明確初始化防重放狀態存放區（建立目錄與 `.initialized` 標記）。回是否可用。"""
+    """建立防重放狀態存放區（目錄與 `.initialized` 標記）。回是否可用。
+
+    🔴 第 14 輪（§5-2）：只在「可信首次建置」呼叫（見 `mark_pending()`）。
+    標記已存在但內容不正確時**不修復**（保守：留給人工處理，不靜默覆蓋）。
+    """
     directory = nonce_store_dir()
     try:
         directory.mkdir(parents=True, exist_ok=True)
         marker = directory / NONCE_STORE_MARKER
         if not marker.exists():
-            marker.write_text("initialized\n", encoding="utf-8")
+            marker.write_text(NONCE_STORE_MAGIC + "\n", encoding="utf-8")
     except OSError:
         return False
-    return True
+    return nonce_store_ready()
 
 
 def nonce_store_ready() -> bool:
-    """防重放狀態存放區是否已就緒（目錄與初始化標記都在）。
+    """防重放狀態存放區是否已就緒（目錄 ＋ **內容正確**的初始化標記）。
 
-    缺失／損壞／不可讀一律回 False ⇒ 呼叫端保守拒絕清除（第 2 輪 A2）。
+    缺失／損壞／不可讀一律回 False ⇒ 呼叫端保守拒絕清除
+    （第 2 輪 A2；第 2 輪 A 組增補 N1）。
     """
     directory = nonce_store_dir()
+    marker = directory / NONCE_STORE_MARKER
     try:
-        return directory.is_dir() and (directory / NONCE_STORE_MARKER).is_file()
-    except OSError:
+        if not directory.is_dir() or not marker.is_file():
+            return False
+        return marker.read_text(encoding="utf-8").strip() == NONCE_STORE_MAGIC
+    except (OSError, UnicodeDecodeError):
         return False
 
 
@@ -355,6 +374,27 @@ def consume_nonce(nonce: str) -> str:
     finally:
         os.close(handle)
     return ""
+
+
+def parse_verdict_declaration(text: str) -> tuple[dict | None, str]:
+    """解析驗收結果檔的機器可讀宣告，回 (宣告, 問題說明)。
+
+    宣告＝`{"version": <64 位十六進位>, "task_id": <卡號>}`。
+
+    🔴 第 14 輪（對應第 2 輪 A 組增補 §5-1）：**唯一且完整**才採用——
+      - 通過宣告必須**恰好 1 個**，且 version 必須是 64 位十六進位；
+      - `task_id=<卡號>` 行必須**恰好 1 行**。
+    不滿足 → 回 (None, 原因)，呼叫端一律拒絕。
+    ⇒ 錯的宣告版本，**不能**靠附錄或內文出現正確 SHA 補足（反例 N2）；
+      重複／衝突的宣告也一律拒絕。
+    """
+    versions = VERDICT_DECL_RE.findall(text)
+    if len(versions) != 1:
+        return None, f"通過宣告必須恰好 1 個（實得 {len(versions)} 個）"
+    task_ids = TASK_ID_DECL_RE.findall(text)
+    if len(task_ids) != 1:
+        return None, f"task_id 宣告必須恰好 1 行（實得 {len(task_ids)} 行）"
+    return {"version": versions[0].lower(), "task_id": task_ids[0]}, ""
 
 
 # 🔴 卡號文法（驗收第 3 條）：明確的 ASCII 白名單，不是「只排除 C0 控制字元」。
@@ -641,6 +681,11 @@ def mark_pending(boundary_id: str, card_id: str, rules: list[str], event: dict) 
     data, store_ok = load_pending()
     if not store_ok:
         return ""
+    # 🔴 第 14 輪（對應第 2 輪 A 組增補 §5-2 / 反例 N3）：初始化只在「可信首次建置」——
+    #    pending 存放區**原本為空**（全新狀態）才建立防重放存放區。若已存在任何 pending
+    #    entry 卻沒有防重放存放區，代表歷史遺失，**不得由 mark_pending 靜默重建**；
+    #    該卡之後一律保守拒絕清除。
+    store_was_empty = not data
     # 已有同卡的 open pending → 只更新它（累加次數），不新增第二筆。
     if card_id:
         for item in data.values():
@@ -656,8 +701,7 @@ def mark_pending(boundary_id: str, card_id: str, rules: list[str], event: dict) 
                 item["boundary_id"] = boundary_id
                 if not save_pending(data):
                     return ""
-                # 有 pending 就必有防重放存放區（clear 要通過「狀態已就緒」檢查）。
-                init_nonce_store()
+                # 此處**不**初始化防重放存放區：既有 pending 的歷史若遺失，保守拒絕。
                 return str(item.get("pending_id") or "")
     pending_id = uuid.uuid4().hex[:12]
     # 🔴 不覆寫其他卡的 entry：若目標鍵已被**別的卡**佔用，改用帶 pending_id 的複合鍵。
@@ -679,7 +723,9 @@ def mark_pending(boundary_id: str, card_id: str, rules: list[str], event: dict) 
     }
     if not save_pending(data):
         return ""
-    init_nonce_store()
+    # 🔴 初始化只在「可信首次建置」（pending 存放區原本為空）；見上方 store_was_empty 的說明。
+    if store_was_empty:
+        init_nonce_store()
     return pending_id
 
 
@@ -781,12 +827,15 @@ def clear_pending(key: str, result_path: str, version: str, reviewer: str, recei
             text = ""
             reason = f"驗收結果檔無法讀取：{exc}"
         if not reason:
-            if VERDICT_MARKER not in text:
-                reason = f"驗收結果沒有宣告通過（缺 {VERDICT_MARKER}）"
-            elif f"task_id={key}" not in text:
-                reason = f"驗收結果沒有綁定目標卡（缺 task_id={key}）"
-            elif artifact_sha not in text:
-                reason = "驗收結果綁的版本與受驗執行檔 SHA256 不符"
+            # 🔴 第 14 輪（對應第 2 輪 A 組增補 §5-1）：解析**宣告欄位**並等值核對，
+            #    不再用「全文包含字串」。⇒ 錯的宣告版本不能被附錄／內文的正確 SHA 補足（N2）。
+            declaration, decl_problem = parse_verdict_declaration(text)
+            if decl_problem:
+                reason = f"驗收結果宣告不合格：{decl_problem}"
+            elif declaration["task_id"] != key:
+                reason = f"驗收結果宣告的 task_id 與目標不符（{declaration['task_id']!r}）"
+            elif declaration["version"] != artifact_sha:
+                reason = "驗收結果宣告的版本與受驗執行檔 SHA256 不符"
             elif str(payload.get("result_sha256") or "") != digest:
                 reason = "receipt 綁定的驗收結果雜湊與實際檔案不符"
 
