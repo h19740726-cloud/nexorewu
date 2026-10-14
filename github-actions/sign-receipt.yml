@@ -1,0 +1,153 @@
+# T02 receipt 簽發 · 安全稿（**未啟用正式 secret、從未簽發過任何 receipt**）
+#
+# 對應 Codex `T02-驗收意見-GitHub簽發邊界-20261014.md` 的四點整改：
+#   1. job 綁定**受保護 environment**（`t02-signing`）→ 必須人工批准才拿得到 secret。
+#   2. 簽發程式來源**固定在已驗證的 commit**（`TRUSTED_COMMIT`，由業主／驗收方填入）；
+#      不執行任何未被固定的 checkout。
+#   3. 輸入一律經 `env` 傳入、**不插值進 shell**；進 shell 前先做嚴格結構驗證。
+#   4. 私鑰只存在 environment secret（`T02_SIGNING_KEY`）；本機與產出者都碰不到。
+#   5. 簽發演算法**不重寫**：直接載入受驗腳本的 `canonical_payload()` 與
+#      `pubkey_fingerprint()`（單一真相源，來自被固定的那個 commit）。
+#
+# 🔴 業主待做設定（六項，詳見交付文件）：
+#   ⓐ repo → Settings → Environments → 建 `t02-signing`
+#   ⓑ 該 environment 加 **required reviewer**（僅 `h19740726-cloud`）
+#   ⓒ `h19840726workb`（施工帳號）**不得**是 reviewer、不得有 admin
+#   ⓓ 私鑰存成該 environment 的 secret `T02_SIGNING_KEY`（只放這裡，不進 repo）
+#   ⓔ 把下方 `TRUSTED_COMMIT` 填成「已獨立驗證的 commit SHA」
+#   ⓕ 若觸發者與批准者可能同一人，開啟 "Prevent self-review"
+name: T02 Sign Receipt
+
+on:
+  workflow_dispatch:
+    inputs:
+      task_id:
+        description: "要核定的卡號"
+        required: true
+        type: string
+      version:
+        description: "受驗執行檔 SHA256（64 位小寫十六進位）"
+        required: true
+        type: string
+      pending_id:
+        description: "要關閉的 pending_id"
+        required: true
+        type: string
+      result_sha256:
+        description: "驗收結果檔 SHA256（64 位小寫十六進位）"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    environment: t02-signing
+    env:
+      # 🔴 由業主／驗收方填入「已獨立驗證」的 commit；留著全 0 時整個 job 直接失敗。
+      TRUSTED_COMMIT: "0000000000000000000000000000000000000000"
+    steps:
+      - name: 檢查可信 commit 是否已設定
+        env:
+          IN_TRUSTED_COMMIT: ${{ env.TRUSTED_COMMIT }}
+        run: |
+          if [ "$IN_TRUSTED_COMMIT" = "0000000000000000000000000000000000000000" ]; then
+            echo "TRUSTED_COMMIT 尚未由業主設定 → 拒絕簽發" >&2
+            exit 1
+          fi
+
+      - name: 驗證輸入格式（env 傳入，不插值進 shell）
+        env:
+          IN_TASK_ID: ${{ inputs.task_id }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_PENDING_ID: ${{ inputs.pending_id }}
+          IN_RESULT_SHA: ${{ inputs.result_sha256 }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          rules = [
+              ("IN_TASK_ID", r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", "task_id"),
+              ("IN_PENDING_ID", r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}", "pending_id"),
+              ("IN_VERSION", r"[0-9a-f]{64}", "version"),
+              ("IN_RESULT_SHA", r"[0-9a-f]{64}", "result_sha256"),
+          ]
+          problems = []
+          for var, pattern, label in rules:
+              value = os.environ.get(var, "")
+              if not re.fullmatch(pattern, value):
+                  problems.append(f"{label} 格式不合法")
+          if problems:
+              sys.exit("；".join(problems))
+          print("輸入驗證通過")
+          PY
+
+      - name: 取出已驗證的簽發來源（固定 commit，不執行其他 checkout）
+        # 🔴 第 18 輪整改④：固定到完整 commit SHA（不可變），不再使用可變標籤 `@v4`。
+        #    此 SHA 由 tag v4 於 2026-10-14 查得（api.github.com/repos/actions/checkout/git/ref/tags/v4）。
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ env.TRUSTED_COMMIT }}
+          persist-credentials: false
+
+      - name: 簽發 receipt（私鑰只來自 environment secret）
+        env:
+          T02_SIGNING_KEY: ${{ secrets.T02_SIGNING_KEY }}
+          IN_TASK_ID: ${{ inputs.task_id }}
+          IN_VERSION: ${{ inputs.version }}
+          IN_PENDING_ID: ${{ inputs.pending_id }}
+          IN_RESULT_SHA: ${{ inputs.result_sha256 }}
+        run: |
+          python3 - <<'PY'
+          import base64, importlib.util, json, os, pathlib, subprocess, sys, tempfile
+
+          key_pem = os.environ.get("T02_SIGNING_KEY", "")
+          if not key_pem.strip():
+              sys.exit("environment secret T02_SIGNING_KEY 未設定 → 拒絕簽發")
+
+          # 🔴 單一真相源：canonical_payload / pubkey_fingerprint 來自受驗腳本（固定 commit 版）。
+          spec = importlib.util.spec_from_file_location("audit", "T02-discipline-audit.py")
+          audit = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(audit)
+
+          with tempfile.TemporaryDirectory() as td:
+              td = pathlib.Path(td)
+              key_path = td / "key.pem"
+              key_path.write_text(key_pem, encoding="utf-8")
+              pub = subprocess.run(
+                  ["openssl", "pkey", "-pubout"], input=key_pem.encode(), capture_output=True
+              )
+              if pub.returncode != 0:
+                  sys.exit("無法由私鑰匯出公鑰（私鑰格式不合法）")
+              pub_pem = pub.stdout.decode("utf-8")
+              payload = {
+                  "task_id": os.environ["IN_TASK_ID"],
+                  "version": os.environ["IN_VERSION"],
+                  "pending_ids": [os.environ["IN_PENDING_ID"]],
+                  "result_sha256": os.environ["IN_RESULT_SHA"],
+                  "nonce": base64.urlsafe_b64encode(os.urandom(24)).decode("ascii").rstrip("="),
+              }
+              canonical = audit.canonical_payload(payload)
+              data_path = td / "payload.bin"
+              data_path.write_bytes(canonical)
+              sig_path = td / "sig.bin"
+              signed = subprocess.run(
+                  ["openssl", "dgst", "-sha256", "-sign", str(key_path), "-out", str(sig_path),
+                   str(data_path)],
+                  capture_output=True,
+              )
+              if signed.returncode != 0:
+                  sys.exit("簽發失敗（openssl 非零結束）")
+              signature = sig_path.read_bytes()
+
+          receipt = {
+              "schema": 1,
+              "payload_b64": base64.b64encode(canonical).decode("ascii"),
+              "signature_b64": base64.b64encode(signature).decode("ascii"),
+              "key_fingerprint": audit.pubkey_fingerprint(pub_pem),
+          }
+              print(json.dumps(receipt, ensure_ascii=False))
+              PY
+
+# <!-- 變更：WorkBuddy ｜ 2026-10-14 19:4x ｜ 第18輪整改④：checkout 固定 commit SHA（11d5960a326750d5838078e36cf38b85af677262，由 tag v4 於當日查得），不再使用可變標籤；「未鎖 action」與「全零 TRUSTED_COMMIT 守門」已補本機失敗測試（test-sign-inputs.py） -->
