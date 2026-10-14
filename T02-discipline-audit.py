@@ -1075,43 +1075,57 @@ def mutation_fingerprint(tool: str, arguments: dict) -> str:
     ).hexdigest()[:16]
 
 
-def verify_mutation_effect(tool: str, arguments: dict, target: str) -> str:
+def verify_mutation_effect(
+    tool: str, arguments: dict, target: str, base_dir: Path | None = None
+) -> str:
     """核對「操作內容」與「實際產物狀態」是否相符。回 "" 表相符；否則回原因。
 
-    🔴 第 16 輪（對應 Codex 2026-10-14 補充）：**不能只驗「檔案存在」**。
-      - `Write`：檔案目前內容必須等於 `content`。
-      - `Edit`：`new_string` 必須已出現在檔案中；若 `old_string` 有給且與 `new_string`
-        不同，`old_string` 不得仍留在檔案中（代表替換沒生效）。
-      - 取不到可核對的欄位（沒有 `content`／`new_string`）→ **明示「未驗證」**，不自動放行。
+    🔴 第 16 輪（對應 Codex 2026-10-14 補充與 12:48 意見）：**不能只驗「檔案存在」**。
+      - `Write`：檔案目前內容必須等於 `content`（`content=""` 是**有效空值**）。
+      - `Edit`：`new_string` 必須已出現在檔案中；`new_string=""`（刪除）時改驗
+        「`old_string` 已不在檔中」；`old_string` 是 `new_string` 的**子字串**時，
+        不因「舊字串仍在檔中」判失敗。
+      - **缺欄位**（型別不是字串）→ 明示「未驗證」，不自動放行；
+        **有效空值**（`""`）不得當成缺欄位。
+      - 相對路徑以 `base_dir`（宿主提供的 cwd）解析，沒有才退回行程 cwd。
       - 不支援的工具（`MultiEdit`／`NotebookEdit`）→ 一律「未驗證」。
 
     ⚠️ 措辭紀律：這裡證明的是「**產物狀態與操作內容相符**」，
     不等於「證明工具真的寫入了檔案」；回報時不得寫成「實際寫入證據」。
     """
     path = Path(target)
-    check = path if path.is_absolute() else Path.cwd() / path
+    check = path if path.is_absolute() else (base_dir or Path.cwd()) / path
     try:
         current = check.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return "產物不存在或無法讀取"
     if tool == "Write":
+        # 🔴 `content=""` 是有效空值（清空檔案），不是「沒有可核對的內容」。
         content = arguments.get("content")
-        if not isinstance(content, str) or not content:
-            return "Write 沒有可核對的 content，操作效果未驗證"
+        if not isinstance(content, str):
+            return "Write 缺 content 欄位，操作效果未驗證"
         if current != content:
             return "檔案內容與 Write 的 content 不符，操作效果未驗證"
         return ""
     if tool == "Edit":
         new_string = arguments.get("new_string")
+        if not isinstance(new_string, str):
+            return "Edit 缺 new_string 欄位，操作效果未驗證"
         old_string = arguments.get("old_string")
-        if not isinstance(new_string, str) or not new_string:
-            return "Edit 沒有可核對的 new_string，操作效果未驗證"
+        if new_string == "":
+            # 🔴 有效空值：合法的刪除。後置條件＝舊字串不應仍留在檔中。
+            if isinstance(old_string, str) and old_string and old_string in current:
+                return "Edit 的 old_string 仍在檔案中，刪除未生效"
+            return ""
         if new_string not in current:
             return "檔案內容不含 Edit 的 new_string，操作效果未驗證"
+        # 🔴 舊字串是「新字串」的子字串時（例：a → ab），替換後它必然仍留在檔中，
+        #    不能據此判失敗。
         if (
             isinstance(old_string, str)
             and old_string
             and old_string != new_string
+            and old_string not in new_string
             and old_string in current
         ):
             return "Edit 的 old_string 仍在檔案中，替換未生效"
@@ -1119,7 +1133,9 @@ def verify_mutation_effect(tool: str, arguments: dict, target: str) -> str:
     return f"不支援的工具效果核對，操作效果未驗證：{tool}"
 
 
-def review_mutations(turn_rows: list[dict]) -> tuple[list[str], list[dict]]:
+def review_mutations(
+    turn_rows: list[dict], base_dir: Path | None = None
+) -> tuple[list[str], list[dict]]:
     """檢視本輪的修改操作，回 (問題清單, 每個目標的摘要)。
 
     🔴 第 15／16 輪（對應 Codex 2026-10-14 仲裁與補充）：
@@ -1179,6 +1195,17 @@ def review_mutations(turn_rows: list[dict]) -> tuple[list[str], list[dict]]:
         if key not in latest or record["order"] > latest[key]["order"]:
             latest[key] = record
 
+    # 🔴 同一目標（工具＋路徑）的**最後一次**操作才做「最終狀態核對」：
+    #    合法的連續編輯（old→middle→final）不應被要求「中間狀態留在最終檔」。
+    last_order_by_target: dict[tuple[str, str], int] = {}
+    for record in calls:
+        target_key = (record["tool"], record["target"])
+        if (
+            target_key not in last_order_by_target
+            or record["order"] > last_order_by_target[target_key]
+        ):
+            last_order_by_target[target_key] = record["order"]
+
     problems: list[str] = []
     summary: list[dict] = []
     for record in sorted(latest.values(), key=lambda item: item["order"]):
@@ -1200,8 +1227,17 @@ def review_mutations(turn_rows: list[dict]) -> tuple[list[str], list[dict]]:
             summary.append({"target": label, "status": "empty_output"})
             problems.append(f"修改操作成功，但結果沒有內容，證據不足：{label}")
             continue
-        # 🔴 第 16 輪（Codex 補充）：核對「操作內容」與「產物實際狀態」，不能只驗檔案存在。
-        effect = verify_mutation_effect(record["tool"], record["arguments"], record["target"])
+        # 🔴 第 16 輪（Codex 補充與 12:48 意見）：只對「該目標的**最後一次**操作」
+        #    核對最終狀態；連續編輯的中間步驟會被後續覆蓋，不得因此判失敗。
+        is_final = (
+            last_order_by_target.get((record["tool"], record["target"])) == record["order"]
+        )
+        if not is_final:
+            summary.append({"target": label, "status": "superseded"})
+            continue
+        effect = verify_mutation_effect(
+            record["tool"], record["arguments"], record["target"], base_dir
+        )
         if effect:
             summary.append({"target": label, "status": "effect_unverified"})
             problems.append(f"{effect}：{label}")
@@ -1333,8 +1369,14 @@ def main() -> int:
         reasons.append("Skill 晚於第一則回覆或第一個修改工具：" + "、".join(late))
 
     # 🔴 第 15 輪（行為防線，對應 Codex 2026-10-14 仲裁）：
-    #    本輪若有修改操作，必須有一次「成功且產物存在」的證據，否則不得宣告完成。
-    mutation_problems, mutation_summary = review_mutations(turn_rows)
+    #    本輪若有修改操作，必須有一次「成功且產物與操作內容相符」的證據，否則不得宣告完成。
+    # 🔴 第 16 輪（Codex 12:48 意見）：相對路徑以**宿主提供的 cwd** 解析；
+    #    宿主沒給才退回行程 cwd（不能默認稽核器 cwd 就是施工 cwd）。
+    cwd_hint = str(event.get("cwd") or "")
+    base_dir = Path(cwd_hint) if cwd_hint else None
+    if base_dir is not None and not base_dir.is_dir():
+        base_dir = None
+    mutation_problems, mutation_summary = review_mutations(turn_rows, base_dir)
     reasons.extend(mutation_problems)
 
     # 🔴 驗收第 1、2 條：取不到卡號或來源損壞 → **一律**結構化拒絕完成（無條件）。

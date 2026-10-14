@@ -1953,6 +1953,86 @@ class DisciplineAuditTest(unittest.TestCase):
         self.assertEqual(record.get("completion_allowed"), False, record)
         self.assertTrue(any("未驗證" in r for r in record.get("reason", [])), record.get("reason"))
 
+    # ---------------- 第 16 輪：內容驗證不得誤擋正常操作（Codex 12:48 意見） ----------------
+
+    def test_r16_a_old_string_substring_of_new_is_allowed(self):
+        """🔴 誤擋案例 1：`old_string` 是 `new_string` 的子字串（a→ab）→ 正常編輯，必須放行。"""
+        session = "session-1"
+        target = self.root / "substring.txt"
+        target.write_text("ab\n", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(target), old_string="a", new_string="ab"),
+            mutation_result(session, "e1", status="completed", text="Edit completed"),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
+    def test_r16_b_empty_new_string_deletion_is_allowed(self):
+        """🔴 誤擋案例 2：`new_string=""`（刪除成空）是**有效空值**，不是欄位缺失。"""
+        session = "session-1"
+        target = self.root / "empty-new.txt"
+        target.write_text("", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(target), old_string="remove", new_string=""),
+            mutation_result(session, "e1", status="completed", text="Edit completed"),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
+    def test_r16_c_empty_write_content_is_allowed(self):
+        """🔴 誤擋案例 3：`Write(content="")` 是有效空值（清空檔案）。"""
+        session = "session-1"
+        target = self.root / "empty-content.txt"
+        target.write_text("", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            write_call(session, "w1", str(target), ""),
+            mutation_result(session, "w1", status="completed", text="The file has been written."),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
+    def test_r16_d_sequential_edits_only_final_state_matters(self):
+        """🔴 合法連續編輯（old→middle→final）不得被誤擋：只核對**最終狀態**，
+        不要求中間狀態留在最終檔。"""
+        session = "session-1"
+        target = self.root / "sequential.txt"
+        target.write_text("final\n", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", str(target), old_string="old", new_string="middle"),
+            mutation_result(session, "e1", status="completed", text="Edit completed"),
+            edit_call(session, "e2", str(target), old_string="middle", new_string="final"),
+            mutation_result(session, "e2", status="completed", text="Edit completed"),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows)
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
+    def test_r16_e_relative_path_resolved_against_host_cwd(self):
+        """🔴 相對路徑要以**宿主提供的 cwd** 解析，不能默認稽核器自己的 cwd。"""
+        session = "session-1"
+        target = self.root / "relative-target.txt"
+        target.write_text("new\n", encoding="utf-8")
+        rows = [
+            user(session),
+            *self._skill_pair(session),
+            edit_call(session, "e1", "relative-target.txt", old_string="old", new_string="new"),
+            mutation_result(session, "e1", status="completed", text="Edit completed"),
+            assistant(session, "已完成，所有數據正確。"),
+        ]
+        _, record = self.run_case(rows, cwd=str(self.root))
+        self.assertEqual(record.get("completion_allowed"), True, record.get("reason"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

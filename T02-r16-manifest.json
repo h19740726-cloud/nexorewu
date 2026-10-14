@@ -1,0 +1,30 @@
+{
+  "T02-discipline-audit.py": {
+    "bytes": 70766,
+    "sha256": "17a329dee18e048df580a6fb242e37017db2d72026eab7f451bfef7652ae42b2"
+  },
+  "test_T02_discipline_audit.py": {
+    "bytes": 102305,
+    "sha256": "ce244f9103fec6d981f66ae17647ed58cae7d1ba81f2d2482b78a956ac5d16b9"
+  },
+  "mutate12.py": {
+    "bytes": 7544,
+    "sha256": "506912455e79a6d76e1deb10d4ca884ffd8c17fa8946dc0d380471ebc3635d04"
+  },
+  "repro-round2.py": {
+    "bytes": 9088,
+    "sha256": "f02688e403cae7e75263bcc662fcc5e346a60ca71cb35604d1f0a74d28a17121"
+  },
+  "e2e12.py": {
+    "bytes": 7280,
+    "sha256": "f9cff20634f6454e67f77c0b9152fa2a24c48d097d2d0b51037c729b2e25bfb9"
+  },
+  "sign-receipt.py": {
+    "bytes": 5925,
+    "sha256": "6c77ec63e37d424dbdb54504ab57adc4c3300641cfbc5cfe0cdd4183a46baf50"
+  },
+  "gen-receipt-key.py": {
+    "bytes": 1876,
+    "sha256": "c128c49689f3c9c98129d69eb8d95b9d884bb79cdd2eda1b4035f288752551ee"
+  }
+}

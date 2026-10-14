@@ -90,7 +90,7 @@ MUTATIONS = [
     ),
     (
         "M10_behavior_defense_disabled",
-        "    mutation_problems, mutation_summary = review_mutations(turn_rows)",
+        "    mutation_problems, mutation_summary = review_mutations(turn_rows, base_dir)",
         "    mutation_problems, mutation_summary = [], []",
         [
             "test_r15_a_failed_edit_with_fabricated_completion_is_blocked",
