@@ -1,0 +1,177 @@
+# T02 receipt 簽發 · 受保護環境版（最終稿）
+# =====================================================================
+# 用途：在 GitHub 的受保護環境（`t02-signing`）中，用**只存在於環境 secret 的私鑰**
+#       簽發一份 T02 核定 receipt；私鑰不寫入 repo、不寫入工作區、不寫入日誌、
+#       也不會交到 WorkBuddy（產出者）手中。
+#
+# 觸發方式（tag push；不需要 workflow 檔存在於預設分支）：
+#   - `t02-sign-*` ：正式簽發（進入受保護環境，需人工審批）
+#   - `t02-probe-*`：管道探針（不進環境、不含任何秘密）
+#
+# 🔴 業主（repo admin）設定清單：
+#   ⓐ Settings → Actions → General → Workflow permissions：維持預設（read）。
+#   ⓑ Settings → Secrets and variables → Actions → Variables：
+#      新增 repository variable `TRUSTED_COMMIT`＝「已獨立驗證的受驗 commit SHA」
+#      （由簽發鏈以外的來源確認其值；workflow 以它為「受驗來源」）。
+#   ⓒ Settings → Environments → 建立 `t02-signing`：
+#      - Required reviewers：`h19840726workb`
+#      - Prevent self-review：開啟
+#      - Environment secret `T02_SIGNING_KEY`：貼入簽發私鑰（PEM）
+#   ⓓ 將本檔內容原樣放上 `.github/workflows/t02-sign-receipt.yml`（內容雜湊須等於
+#      `github-actions/t02-sign-receipt.yml` 權威副本；workflow 會自我比對）。
+#
+# 安全結構（為什麼這樣拆）：
+#   1. `preflight` job（無環境、無秘密）：先跑——把「本次要簽發的全部內容」寫進
+#      run 摘要，供**審批人在批准前檢視**。
+#   2. `sign` job（environment `t02-signing`）：等待人工批准後才取得 secret。
+#   3. 私鑰只出現在**單一「純 openssl 命令」步驟**——該步驟不執行任何 repo 內的
+#      程式碼；所有載入受驗程式（稽核器）的步驟都安排在「無鑰區」。
+#       → 即使受驗程式碼有竊取邏輯，它在「沒有私鑰的環境」中執行，取不到任何秘密。
+#   4. 受驗檔「雙源比對」：tag commit 的工作樹與 `TRUSTED_COMMIT`（repo variable）
+#      的工作樹，對簽發鏈全部檔案逐位元比對，任一不符即拒絕。
+#   5. 防 TOCTOU：`sign` 重新計算 payload，必須與 `preflight` 的 payload 雜湊一致
+#      才簽名——保證「被審批的內容」＝「被簽名的內容」。
+#
+# 私鑰落地邊界：只寫入 runner 的 `$RUNNER_TEMP`（一次性、不上傳、run 結束銷毀），
+# 不進 `$GITHUB_WORKSPACE`（repo 工作區）、不進 artifact、不進任何日誌（umask 077；
+# 全程不開 `set -x`；openssl 以 `-out` 寫檔，不輸出金鑰或簽章內容）。
+# =====================================================================
+name: T02 Sign Receipt
+
+on:
+  push:
+    tags:
+      - 't02-sign-*'
+      - 't02-probe-*'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: startsWith(github.ref, 'refs/tags/t02-probe-')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo facts
+        run: |
+          echo "probe-ok"
+          echo "ref=${{ github.ref }}"
+          echo "sha=${{ github.sha }}"
+          echo "run_id=${{ github.run_id }}"
+          echo "run_attempt=${{ github.run_attempt }}"
+
+  preflight:
+    if: startsWith(github.ref, 'refs/tags/t02-sign-')
+    runs-on: ubuntu-latest
+    outputs:
+      payload_sha256: ${{ steps.pre.outputs.payload_sha256 }}
+    steps:
+      - name: Checkout tag 樹（tag commit）
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: tag-tree
+          persist-credentials: false
+
+      - name: Checkout TRUSTED_COMMIT 樹（repo variable）
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ vars.TRUSTED_COMMIT }}
+          path: trusted-tree
+          persist-credentials: false
+
+      - name: 【無鑰】preflight（雙源比對＋申請檔自洽）
+        id: pre
+        env:
+          T02_TRUSTED_COMMIT: ${{ vars.TRUSTED_COMMIT }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t02-sign"
+          python3 trusted-tree/t02-ci-payload.py preflight \
+            --tag-tree tag-tree \
+            --trusted-tree trusted-tree \
+            --request T02-sign-request.json \
+            --payload-out "$RUNNER_TEMP/t02-sign/payload.preflight.bin"
+
+  sign:
+    if: startsWith(github.ref, 'refs/tags/t02-sign-')
+    needs: preflight
+    runs-on: ubuntu-latest
+    environment: t02-signing
+    concurrency:
+      group: t02-signing
+      cancel-in-progress: false
+    steps:
+      - name: Checkout tag 樹（tag commit）
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+          path: tag-tree
+          persist-credentials: false
+
+      - name: Checkout TRUSTED_COMMIT 樹（repo variable）
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ vars.TRUSTED_COMMIT }}
+          path: trusted-tree
+          persist-credentials: false
+
+      - name: 【無鑰】preflight 重跑（與審批前內容一致）
+        id: re
+        env:
+          T02_TRUSTED_COMMIT: ${{ vars.TRUSTED_COMMIT }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/t02-sign"
+          python3 trusted-tree/t02-ci-payload.py preflight \
+            --tag-tree tag-tree \
+            --trusted-tree trusted-tree \
+            --request T02-sign-request.json \
+            --payload-out "$RUNNER_TEMP/t02-sign/payload.bin"
+
+      - name: 【無鑰】確認與審批前一致（防 TOCTOU）
+        env:
+          EXPECTED_SHA: ${{ needs.preflight.outputs.payload_sha256 }}
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA=$(sha256sum "$RUNNER_TEMP/t02-sign/payload.bin" | cut -d' ' -f1)
+          if [ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]; then
+            echo "payload 與審批前不一致（expected=$EXPECTED_SHA actual=$ACTUAL_SHA）→ 拒絕簽發" >&2
+            exit 1
+          fi
+          echo "payload 一致性確認通過（sha256=$ACTUAL_SHA）"
+
+      - name: 【有鑰】簽名（唯一持有私鑰的步驟；純 openssl，不執行任何 repo 程式碼）
+        env:
+          T02_SIGNING_KEY: ${{ secrets.T02_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          if [ -z "${T02_SIGNING_KEY:-}" ]; then
+            echo "environment secret T02_SIGNING_KEY 未設定 → 拒絕簽發" >&2
+            exit 1
+          fi
+          D="$RUNNER_TEMP/t02-sign"
+          printf '%s\n' "$T02_SIGNING_KEY" > "$D/key.pem"
+          /usr/bin/openssl pkey -in "$D/key.pem" -pubout -out "$D/pub.pem"
+          /usr/bin/openssl dgst -sha256 -sign "$D/key.pem" -out "$D/sig.bin" "$D/payload.bin"
+          echo "簽名完成（私鑰與簽章內容不在日誌顯示）"
+
+      - name: 【無鑰】組裝 receipt
+        run: |
+          set -euo pipefail
+          D="$RUNNER_TEMP/t02-sign"
+          python3 trusted-tree/t02-ci-payload.py assemble \
+            --trusted-tree trusted-tree \
+            --payload-bin "$D/payload.bin" \
+            --sig-bin "$D/sig.bin" \
+            --pub-pem "$D/pub.pem" \
+            --receipt-out "$D/receipt.json"
+
+      - name: 上傳 receipt 為 artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: t02-receipt
+          path: ${{ runner.temp }}/t02-sign/receipt.json
+          if-no-files-found: error
+          retention-days: 90

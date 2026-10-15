@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>T02 簽發金鑰產生器（本地端）</title>
+<style>
+  body { font-family: -apple-system, "PingFang TC", sans-serif; margin: 0; padding: 16px; background: #f5f5f7; color: #1d1d1f; }
+  h1 { font-size: 20px; }
+  .card { background: #fff; border-radius: 12px; padding: 14px; margin: 12px 0; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .warn { color: #a8071a; font-weight: 600; }
+  .hint { color: #555; font-size: 13px; }
+  button { font-size: 16px; padding: 10px 16px; border-radius: 10px; border: none; background: #0a84ff; color: #fff; }
+  button.secondary { background: #e8e8ed; color: #1d1d1f; }
+  textarea { width: 100%; box-sizing: border-box; height: 150px; font-family: ui-monospace, Menlo, monospace; font-size: 11px; border-radius: 8px; border: 1px solid #ccc; padding: 8px; }
+  .fp { font-family: ui-monospace, Menlo, monospace; background: #f0f0f2; border-radius: 8px; padding: 8px; word-break: break-all; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .step { font-weight: 600; margin-top: 12px; }
+</style>
+</head>
+<body>
+<h1>T02 簽發金鑰產生器</h1>
+<p class="hint">本頁面完全在你的裝置上執行：<b>不連網、不上傳任何資料</b>。金鑰用 WebCrypto（ECDSA P-256）在你的裝置內產生。</p>
+
+<div class="card">
+  <button id="gen">① 產生金鑰對</button>
+  <span id="status" class="hint"></span>
+</div>
+
+<div class="card" id="priv-card" hidden>
+  <div class="step">② 私鑰（PRIVATE KEY）</div>
+  <p class="warn">不要傳給任何人（包括 AI）。唯一去處：GitHub 的「環境 secret」欄位（貼上即完成，之後誰都讀不回來）。</p>
+  <textarea id="priv" readonly spellcheck="false"></textarea>
+  <div class="row">
+    <button class="secondary" id="copy-priv">複製私鑰</button>
+  </div>
+</div>
+
+<div class="card" id="pub-card" hidden>
+  <div class="step">③ 公鑰（PUBLIC KEY）</div>
+  <p class="hint">公鑰是公開的，可以貼給任何人（例如傳給 AI 做安裝與核對）。</p>
+  <textarea id="pub" readonly spellcheck="false"></textarea>
+  <div class="row">
+    <button class="secondary" id="copy-pub">複製公鑰</button>
+  </div>
+  <div class="step">公鑰指紋（SHA-256 前 16 碼）</div>
+  <div class="fp" id="fp">—</div>
+  <p class="hint">核對點：安裝完成後，GitHub 簽發流程的輸出會顯示同一組指紋；兩者一致＝信任根就是這把金鑰。</p>
+</div>
+
+<div class="card">
+  <p class="hint">格式已與 T02 簽發鏈（openssl P-256）驗證相容：本頁產生的私鑰可直接被簽發流程使用，公鑰可直接內嵌進稽核器驗簽。</p>
+</div>
+
+<script>
+function derToPem(der, label) {
+  const bytes = new Uint8Array(der);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  const b64 = btoa(bin);
+  const lines = b64.match(/.{1,64}/g).join('\n');
+  return '-----BEGIN ' + label + '-----\n' + lines + '\n-----END ' + label + '-----\n';
+}
+
+async function fingerprint(pubPem) {
+  const normalized = pubPem.trim().split(/\r?\n/).map(function (l) { return l.trim(); }).filter(function (l) { return l.length > 0; }).join('\n');
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(normalized));
+  const hex = Array.from(new Uint8Array(hash)).map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
+  return hex.slice(0, 16);
+}
+
+function copyText(text, button) {
+  const done = function () {
+    const old = button.textContent;
+    button.textContent = '已複製 ✓';
+    setTimeout(function () { button.textContent = old; }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done, function () {
+      fallbackCopy(text); done();
+    });
+  } else {
+    fallbackCopy(text); done();
+  }
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); } catch (e) {}
+  document.body.removeChild(ta);
+}
+
+document.getElementById('gen').addEventListener('click', async function () {
+  const status = document.getElementById('status');
+  status.textContent = '產生中…';
+  try {
+    if (!crypto.subtle) { throw new Error('此瀏覽器環境不支援 WebCrypto（請改用另一種方式產生金鑰）'); }
+    const kp = await crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
+    const pkcs8 = await crypto.subtle.exportKey('pkcs8', kp.privateKey);
+    const spki = await crypto.subtle.exportKey('spki', kp.publicKey);
+    const privPem = derToPem(pkcs8, 'PRIVATE KEY');
+    const pubPem = derToPem(spki, 'PUBLIC KEY');
+    document.getElementById('priv').value = privPem;
+    document.getElementById('pub').value = pubPem;
+    document.getElementById('fp').textContent = await fingerprint(pubPem);
+    document.getElementById('priv-card').hidden = false;
+    document.getElementById('pub-card').hidden = false;
+    status.textContent = '完成（請依序完成 ② 與 ③）';
+  } catch (err) {
+    status.textContent = '失敗：' + err.message;
+  }
+});
+
+document.getElementById('copy-priv').addEventListener('click', function () {
+  copyText(document.getElementById('priv').value, this);
+});
+document.getElementById('copy-pub').addEventListener('click', function () {
+  copyText(document.getElementById('pub').value, this);
+});
+</script>
+</body>
+</html>

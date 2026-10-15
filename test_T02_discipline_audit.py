@@ -2219,6 +2219,37 @@ class DisciplineAuditTest(unittest.TestCase):
         finally:
             pending_path.chmod(0o644)
 
+    def test_r17_b11_pending_write_failure_leaves_correction_mark_in_log(self):
+        """🔴 B 組（最終輪補完）：pending 寫入失敗 → 日誌必須留下 `CLEAR_FAILED` 更正痕；
+        「日誌回推」據此把該筆視為**仍未清**（即使存放區整個被刪除，也擋得住假痕）。"""
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        verdict = self.root / "v.md"
+        self.write_verdict(verdict, "test-card", script_version())
+        receipt = self.write_receipt(self.receipt_payload("test-card", result_path=verdict))
+        pending_path = self.root / "pending.json"
+        pending_path.chmod(0o444)
+        try:
+            refused = self.run_cli(
+                "--clear", "test-card", "--result", str(verdict), "--version", script_version(),
+                "--by", "codex", "--receipt", str(receipt),
+            )
+            self.assertNotEqual(refused.returncode, 0, "pending 寫入失敗時必須拒絕")
+        finally:
+            pending_path.chmod(0o644)
+        records = [json.loads(line) for line in self.log.read_text(encoding="utf-8").splitlines()]
+        cleared = [r for r in records if r.get("result") == "PENDING_CLEARED"]
+        failed = [r for r in records if r.get("result") == "CLEAR_FAILED"]
+        self.assertTrue(cleared, "先留痕：PENDING_CLEARED 必須已寫入")
+        self.assertTrue(failed, "寫入失敗必須留下 CLEAR_FAILED 更正痕")
+        self.assertEqual(failed[-1].get("pending_id"), cleared[-1].get("pending_id"),
+                         "更正痕必須指回同一筆 pending")
+        # 日誌回推：把存放區刪掉（模擬被刪除）→ 仍必須回「未清」（假痕被更正痕抵消）
+        pending_path.unlink()
+        status = self.run_cli("--status", "test-card")
+        payload = json.loads(status.stdout)
+        self.assertFalse(payload.get("completion_allowed"), status.stdout)
+        self.assertIn("未清除", json.dumps(payload, ensure_ascii=False))
+
 
     # ---------------- 第 18 輪 C 組：`--on-user-prompt` 回讀（機械可識別 BLOCK） ----------------
 
@@ -2458,6 +2489,226 @@ class DisciplineAuditTest(unittest.TestCase):
         self.assertEqual(out.get("decision"), "allow", proc.stdout)
         self.assertIs(out.get("continue"), True, proc.stdout)
 
+    # ---------------- 第 22 輪：信任根不可替換（對應最終整改④） ----------------
+    #
+    # 驗簽信任根＝受驗腳本**內嵌的公鑰常數**（`RECEIPT_PUBKEY_PEM`），是唯一來源：
+    # 不讀環境變數、不讀工作目錄／腳本目錄的可寫檔、不接受 CLI 參數。
+    # 以下五條以「各路徑注入攻擊者公鑰 B」為情境；每條都附「A 簽的正向對照」，
+    # 證明拒絕的原因確實是「信任根不被替換」，而不是一概拒絕。
+
+    def _hostile_env(self, pub_b_path):
+        """敵意環境變數組：各種可能被當成公鑰來源的名稱（含值與路徑兩型）。"""
+        pub_b_text = Path(pub_b_path).read_text(encoding="utf-8")
+        return {
+            "T02_RECEIPT_PUBKEY": pub_b_text,
+            "RECEIPT_PUBKEY_PEM": pub_b_text,
+            "T02_PUBKEY_PEM": pub_b_text,
+            "T02_PUBKEY": str(pub_b_path),
+            "T02_PUBKEY_PATH": str(pub_b_path),
+            "T02_RECEIPT_PUBKEY_PATH": str(pub_b_path),
+        }
+
+    def _make_b_key(self):
+        priv_b = self.root / "b-priv.pem"
+        pub_b = self.root / "b-pub.pem"
+        make_keypair(priv_b, pub_b)
+        return priv_b, pub_b
+
+    def test_r22_a_env_vars_cannot_replace_trust_root(self):
+        """🔴 環境變數不得替換驗簽信任根（公鑰只認內嵌常數）。
+
+        B 簽的 receipt ＋ 敵意環境變數（注入 B 公鑰）→ 拒、pending 不動；
+        A 簽的 receipt ＋ 同樣敵意環境變數 → 照常清除成功（對照組）。
+        """
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        verdict = self.root / "v.md"
+        self.write_verdict(verdict, "test-card", script_version())
+        priv_b, pub_b = self._make_b_key()
+        hostile = self._hostile_env(pub_b)
+
+        receipt_b = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-b.json",
+            priv_path=priv_b,
+            pub_pem=Path(pub_b).read_text(encoding="utf-8"),
+        )
+        refused = self.run_cli(
+            "--clear", "test-card", "--result", str(verdict), "--by", "codex",
+            "--receipt", str(receipt_b), env_extra=hostile,
+        )
+        self.assertNotEqual(refused.returncode, 0, "敵意環境變數下，B 簽的 receipt 必須被拒")
+        self.assertTrue(
+            ("公鑰指紋" in refused.stderr) or ("簽章" in refused.stderr), refused.stderr
+        )
+        after = json.loads((self.root / "pending.json").read_text(encoding="utf-8"))
+        for item in after.values():
+            self.assertEqual(item.get("completion_allowed"), False, "pending 不得被改寫")
+
+        receipt_a = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-a.json",
+        )
+        cleared = self.run_cli(
+            "--clear", "test-card", "--result", str(verdict), "--by", "codex",
+            "--receipt", str(receipt_a), env_extra=hostile,
+        )
+        self.assertEqual(cleared.returncode, 0, cleared.stdout + cleared.stderr)
+
+    def test_r22_b_cwd_files_cannot_replace_trust_root(self):
+        """工作目錄（cwd）放同名公鑰檔 → 不得影響驗簽；A 簽仍可清除（對照組）。"""
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        verdict = self.root / "v.md"
+        self.write_verdict(verdict, "test-card", script_version())
+        priv_b, pub_b = self._make_b_key()
+        pub_b_text = Path(pub_b).read_text(encoding="utf-8")
+
+        hostile_cwd = self.root / "hostile-cwd"
+        hostile_cwd.mkdir()
+        for name in (
+            "pub.pem", "T02-receipt-pub.pem", "receipt-pubkey.pem",
+            "t02-pubkey.pem", "T02_RECEIPT_PUBKEY.pem",
+        ):
+            (hostile_cwd / name).write_text(pub_b_text, encoding="utf-8")
+
+        receipt_b = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-b.json",
+            priv_path=priv_b,
+            pub_pem=pub_b_text,
+        )
+        proc = subprocess.run(
+            ["/usr/bin/python3", str(self.script), "--clear", "test-card",
+             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_b)],
+            input="", text=True, capture_output=True,
+            env=self.isolated_env(), cwd=str(hostile_cwd), check=False,
+        )
+        self.assertNotEqual(proc.returncode, 0, "cwd 公鑰檔不得替換信任根")
+
+        receipt_a = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-a.json",
+        )
+        proc_a = subprocess.run(
+            ["/usr/bin/python3", str(self.script), "--clear", "test-card",
+             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_a)],
+            input="", text=True, capture_output=True,
+            env=self.isolated_env(), cwd=str(hostile_cwd), check=False,
+        )
+        self.assertEqual(proc_a.returncode, 0, proc_a.stdout + proc_a.stderr)
+
+    def test_r22_c_script_dir_files_cannot_replace_trust_root(self):
+        """受驗腳本所在目錄放同名可寫檔 → 不得替換信任根；A 簽仍可清除（對照組）。"""
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        verdict = self.root / "v.md"
+        self.write_verdict(verdict, "test-card", script_version())
+        priv_b, pub_b = self._make_b_key()
+        pub_b_text = Path(pub_b).read_text(encoding="utf-8")
+
+        script_dir = self.root / "hostile-scriptdir"
+        script_dir.mkdir()
+        copied = script_dir / "T02-audit-copy.py"
+        copied.write_bytes((_ACTIVE_SCRIPT or SCRIPT).read_bytes())  # 逐位元相同 → SHA 一致
+        for name in ("pub.pem", "T02-receipt-pub.pem", "receipt-pubkey.pem"):
+            (script_dir / name).write_text(pub_b_text, encoding="utf-8")
+
+        receipt_b = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-b.json",
+            priv_path=priv_b,
+            pub_pem=pub_b_text,
+        )
+        proc = subprocess.run(
+            ["/usr/bin/python3", str(copied), "--clear", "test-card",
+             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_b)],
+            input="", text=True, capture_output=True,
+            env=self.isolated_env(), check=False,
+        )
+        self.assertNotEqual(proc.returncode, 0, "腳本目錄公鑰檔不得替換信任根")
+
+        receipt_a = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-a.json",
+        )
+        proc_a = subprocess.run(
+            ["/usr/bin/python3", str(copied), "--clear", "test-card",
+             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_a)],
+            input="", text=True, capture_output=True,
+            env=self.isolated_env(), check=False,
+        )
+        self.assertEqual(proc_a.returncode, 0, proc_a.stdout + proc_a.stderr)
+
+    def test_r22_d_cli_pubkey_argument_cannot_replace_trust_root(self):
+        """CLI 不得以參數指定／替換信任根公鑰；A 簽仍可清除（對照組）。"""
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        verdict = self.root / "v.md"
+        self.write_verdict(verdict, "test-card", script_version())
+        priv_b, pub_b = self._make_b_key()
+
+        receipt_b = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-b.json",
+            priv_path=priv_b,
+            pub_pem=Path(pub_b).read_text(encoding="utf-8"),
+        )
+        refused = self.run_cli(
+            "--clear", "test-card", "--result", str(verdict), "--by", "codex",
+            "--receipt", str(receipt_b),
+            "--pubkey", str(pub_b), "--pubkey-pem", str(pub_b), "--pubkey-path", str(pub_b),
+        )
+        self.assertNotEqual(refused.returncode, 0, "CLI 公鑰參數不得替換信任根")
+
+        receipt_a = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-a.json",
+        )
+        cleared = self.run_cli(
+            "--clear", "test-card", "--result", str(verdict), "--by", "codex",
+            "--receipt", str(receipt_a),
+            "--pubkey", str(pub_b), "--pubkey-pem", str(pub_b), "--pubkey-path", str(pub_b),
+        )
+        self.assertEqual(cleared.returncode, 0, cleared.stdout + cleared.stderr)
+
+    def test_r22_e_uninstalled_trust_root_immune_to_env_and_files(self):
+        """信任根未安裝（公鑰常數為空）時，敵意環境變數與檔案也不能把它「補上」。"""
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        verdict = self.root / "v.md"
+        self.write_verdict(verdict, "test-card", script_version())
+        priv_b, pub_b = self._make_b_key()
+        hostile = self._hostile_env(pub_b)
+
+        # 以「公鑰清空的副本」做未安裝情境（對安裝狀態免疫；不論原腳本是否已安裝）
+        src = (_ACTIVE_SCRIPT or SCRIPT).read_text(encoding="utf-8")
+        patched_lines = []
+        replaced = False
+        for line in src.splitlines(keepends=True):
+            if not replaced and line.startswith("RECEIPT_PUBKEY_PEM = "):
+                patched_lines.append('RECEIPT_PUBKEY_PEM = ""\n')
+                replaced = True
+            else:
+                patched_lines.append(line)
+        self.assertTrue(replaced, "受驗腳本找不到公鑰常數（結構已變動，測試需同步）")
+        no_key_script = self.root / "audit-no-key.py"
+        no_key_script.write_text("".join(patched_lines), encoding="utf-8")
+
+        hostile_cwd = self.root / "hostile-cwd"
+        hostile_cwd.mkdir()
+        (hostile_cwd / "pub.pem").write_text(Path(pub_b).read_text(encoding="utf-8"), encoding="utf-8")
+
+        receipt_b = self.write_receipt(
+            self.receipt_payload("test-card", result_path=verdict),
+            path=self.root / "receipt-b.json",
+            priv_path=priv_b,
+            pub_pem=Path(pub_b).read_text(encoding="utf-8"),
+        )
+        proc = subprocess.run(
+            ["/usr/bin/python3", str(no_key_script), "--clear", "test-card",
+             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_b)],
+            input="", text=True, capture_output=True,
+            env=self.isolated_env(hostile), cwd=str(hostile_cwd), check=False,
+        )
+        self.assertNotEqual(proc.returncode, 0)
+        self.assertIn("尚未安裝核定公鑰", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
@@ -2473,5 +2724,6 @@ if __name__ == "__main__":
 # <!-- 變更：WorkBuddy ｜ 2026-10-14 19:4x ｜ 第18輪整改②：新增 r18_c9（宿主安全鎖：continue 必為 true、rc=0）、r18_c10（正式掛載檢查：settings.json 的 UserPromptSubmit 含 injector 式 --on-user-prompt 命令） -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-15 06:5x ｜ 第20輪對齊（依 Codex 第20輪指示「不得改動 settings.json」）：r18_c10 改為兩段式安全契約（①若掛載存在必須是 injector 形式；②不論掛載存不存在，以正式調用形式實跑 --on-user-prompt 必須 decision=allow／continue=true／rc=0）。（第21輪再對齊，見下） -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-15 08:1x ｜ 第21輪對齊（業主裁決「乙案」）：r18_c10 改為「設計契約＋安全兜底」——①UserPromptSubmit 不得含 T02 回讀（assertFalse，若被加回即轉紅）②本體實跑安全段保留。同步撤回「UserPromptSubmit 已執行稽核器」的主張：T02 稽核只在 Stop 側。 -->
+# <!-- 變更：WorkBuddy ｜ 2026-10-15 19:0x ｜ 最終輪：新增 r22_a~e（信任根不可替換：環境變數／工作目錄可寫檔／腳本目錄可寫檔／CLI 參數／未安裝時免疫；每條附 A 簽正向對照）＋ `_hostile_env`／`_make_b_key` helper（對應最終整改④） -->
 
 

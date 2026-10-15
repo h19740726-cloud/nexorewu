@@ -36,6 +36,15 @@
   兩者的突變直接改 `continue`／`decision` 兩個宿主欄位，而 c10 於第 20 輪改為
   「兩段式安全契約」後會直接鎖這兩個值 ⇒ 兩組本應多紅 c10 一條（全量首跑實得
   各多一條 c10，屬預期）；expected 同步後，15 組於各自批次內全數精準。
+
+🔴 最終輪新增 M16／M17（2026-10-15，對應最終整改④「信任根不可替換」）：
+  - M16：信任根改讀**環境變數**（`T02_RECEIPT_PUBKEY` 優先於內嵌常數）
+    ⇒ 預期轉紅 r22_a（env 向量）與 r22_e（未安裝免疫）。
+  - M17：信任根 fallback 到**可寫檔**（cwd 與腳本目錄的 `pub.pem`）
+    ⇒ 預期轉紅 r22_b（cwd 向量）、r22_c（腳本目錄向量）與 r22_e。
+  - 兩組的紅燈互補且不散射（r22_a 不受 M17 影響、r22_b／c 不受 M16 影響、
+    r22_d 兩組皆綠＝CLI 向量不在這兩條突變的路徑上），已在實作前以徒手探針驗證。
+  全量 17 組。
 """
 from __future__ import annotations
 
@@ -104,7 +113,11 @@ MUTATIONS = [
         "M7_stop_pubkey_installed_guard",
         "    if not RECEIPT_PUBKEY_PEM.strip():",
         "    if False:",
-        ["test_r12_c_uninstalled_pubkey_rejects_all_clears"],
+        [
+            "test_r12_c_uninstalled_pubkey_rejects_all_clears",
+            # 最終輪同步：r22_e 同樣斷言「尚未安裝守門」（M7 關掉它時應一併轉紅）。
+            "test_r22_e_uninstalled_trust_root_immune_to_env_and_files",
+        ],
     ),
     (
         "M8_stop_result_taskid_check",
@@ -145,7 +158,11 @@ MUTATIONS = [
         "M12_stop_pending_write_failure_must_refuse",
         '        print("clear refused: pending 存放區寫入失敗，未清除", file=sys.stderr)\n        return 3',
         '        print("clear refused: pending 存放區寫入失敗，未清除", file=sys.stderr)\n        return 0',
-        ["test_r17_b7_unwritable_pending_store_keeps_original_file"],
+        [
+            "test_r17_b7_unwritable_pending_store_keeps_original_file",
+            # 最終輪同步：b11 同樣斷言「寫入失敗時 rc!=0」（M12 改成假成功時應一併轉紅）。
+            "test_r17_b11_pending_write_failure_leaves_correction_mark_in_log",
+        ],
     ),
     (
         "M13_user_prompt_readback_never_blocks",
@@ -191,6 +208,52 @@ MUTATIONS = [
             "test_r18_c9_host_safety_never_blocks_prompt",
             "test_r18_c10_formal_hook_installed_in_settings",
         ],
+    ),
+    (
+        # 🔴 最終輪新增：信任根（內嵌公鑰）被**環境變數**替換的突變。
+        # 對應 r22_a（env 向量反例）與 r22_e（未安裝時對 env 免疫）。
+        # r22_b／c／d 綠＝正確（它們測的是檔案與 CLI 向量，本突變不涉及）。
+        "M16_trustroot_env_override",
+        '    if not RECEIPT_PUBKEY_PEM.strip():\n        return None, "尚未安裝核定公鑰',
+        (
+            '    if os.environ.get("T02_RECEIPT_PUBKEY"):\n'
+            '        globals()["RECEIPT_PUBKEY_PEM"] = os.environ["T02_RECEIPT_PUBKEY"]\n'
+            '    if not RECEIPT_PUBKEY_PEM.strip():\n'
+            '        return None, "尚未安裝核定公鑰'
+        ),
+        [
+            "test_r22_a_env_vars_cannot_replace_trust_root",
+            "test_r22_e_uninstalled_trust_root_immune_to_env_and_files",
+        ],
+    ),
+    (
+        # 🔴 最終輪新增：信任根被**工作目錄／腳本目錄可寫檔**替換的突變。
+        # 對應 r22_b（cwd 向量）、r22_c（腳本目錄向量）與 r22_e（未安裝時對檔案免疫）。
+        # r22_a／d 綠＝正確（env 與 CLI 向量，本突變不涉及）。
+        "M17_trustroot_file_fallback",
+        '    if not RECEIPT_PUBKEY_PEM.strip():\n        return None, "尚未安裝核定公鑰',
+        (
+            '    for _fallback in (Path.cwd() / "pub.pem", SELF_ARTIFACT_PATH.parent / "pub.pem"):\n'
+            '        if _fallback.is_file():\n'
+            '            globals()["RECEIPT_PUBKEY_PEM"] = _fallback.read_text(encoding="utf-8")\n'
+            '            break\n'
+            '    if not RECEIPT_PUBKEY_PEM.strip():\n'
+            '        return None, "尚未安裝核定公鑰'
+        ),
+        [
+            "test_r22_b_cwd_files_cannot_replace_trust_root",
+            "test_r22_c_script_dir_files_cannot_replace_trust_root",
+            "test_r22_e_uninstalled_trust_root_immune_to_env_and_files",
+        ],
+    ),
+    (
+        # 🔴 最終輪新增：關掉日誌回推對 `CLEAR_FAILED` 更正痕的採納
+        # （＝「pending 寫入失敗後，假痕不會被更正」的缺陷形狀）。
+        # 對應 r17_b11（最終輪補完的 B 組測試）。
+        "M18_clear_failed_correction_ignored",
+        '        elif result == "CLEAR_FAILED":',
+        '        elif False and result == "CLEAR_FAILED":',
+        ["test_r17_b11_pending_write_failure_leaves_correction_mark_in_log"],
     ),
 ]
 
