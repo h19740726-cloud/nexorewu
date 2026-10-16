@@ -29,8 +29,12 @@
 #       → 即使受驗程式碼有竊取邏輯，它在「沒有私鑰的環境」中執行，取不到任何秘密。
 #   4. 受驗檔「雙源比對」：tag commit 的工作樹與 `TRUSTED_COMMIT`（repo variable）
 #      的工作樹，對簽發鏈全部檔案逐位元比對，任一不符即拒絕。
-#   5. 防 TOCTOU：`sign` 重新計算 payload，必須與 `preflight` 的 payload 雜湊一致
+#   5. 防 TOCTOU（2026-10-16 修復固定化後仍逐位元組比對）：`sign` 重新計算 payload，必須與 `preflight` 的 payload 雜湊一致
 #      才簽名——保證「被審批的內容」＝「被簽名的內容」。
+#      🔴 修復說明（run 38844329678 實測）：`nonce`／`issued_at` 原為每次執行重新生成，
+#      兩次獨立執行必然不一致 ⇒ 比對必然失敗、簽名被拒。修復＝`preflight` 生成後經
+#      GITHUB_OUTPUT 導出，`sign` 重跑以 `--pin-*`（env 中介）重用同一組值；
+#      **比對邏輯本身不放寬**（仍為逐位元組雜湊比對）。
 #
 # 私鑰落地邊界：只寫入 runner 的 `$RUNNER_TEMP`（一次性、不上傳、run 結束銷毀），
 # 不進 `$GITHUB_WORKSPACE`（repo 工作區）、不進 artifact、不進任何日誌（umask 077；
@@ -65,6 +69,8 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       payload_sha256: ${{ steps.pre.outputs.payload_sha256 }}
+      payload_nonce: ${{ steps.pre.outputs.payload_nonce }}
+      payload_issued_at: ${{ steps.pre.outputs.payload_issued_at }}
     steps:
       - name: Checkout tag 樹（tag commit）
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
@@ -120,6 +126,8 @@ jobs:
         id: re
         env:
           T02_TRUSTED_COMMIT: ${{ vars.TRUSTED_COMMIT }}
+          PIN_NONCE: ${{ needs.preflight.outputs.payload_nonce }}
+          PIN_ISSUED_AT: ${{ needs.preflight.outputs.payload_issued_at }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/t02-sign"
@@ -127,6 +135,8 @@ jobs:
             --tag-tree tag-tree \
             --trusted-tree trusted-tree \
             --request T02-sign-request.json \
+            --pin-nonce "$PIN_NONCE" \
+            --pin-issued-at "$PIN_ISSUED_AT" \
             --payload-out "$RUNNER_TEMP/t02-sign/payload.bin"
 
       - name: 【無鑰】確認與審批前一致（防 TOCTOU）
