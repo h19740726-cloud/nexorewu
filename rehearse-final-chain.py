@@ -8,7 +8,8 @@
 步驟（對應 workflow）：
   S0  準備：造「測試公鑰版」稽核器（兩棵樹）、造 pending（真實 Stop 事件）、
       生成結果檔與申請檔
-  S1  preflight（= workflow 的 preflight / sign 內重跑）→ payload.bin
+  S1a preflight（第一次；= workflow 的 preflight job）→ payload ＋ 導出 pin
+  S1b preflight 重跑（= workflow 的 sign 內重跑；帶 pin）→ 與 S1a 位元組相同
   S2  簽名（= workflow 的有鑰步驟；純 openssl）→ sig.bin / pub.pem
   S3  assemble（= workflow 的組裝步驟）→ receipt.json
   S4  反例（清除前）：錯卡、錯版本、錯簽名、竄改受驗檔 → 全部拒＋pending 不變
@@ -170,22 +171,44 @@ def main() -> int:
             return finish()
         shutil.copy2(req_out, trusted_tree / "T02-sign-request.json")
 
-        # ---------- S1 preflight ----------
+        # ---------- S1a preflight（第一次：生成 pin） ----------
         fake_trusted_commit = "a" * 40
+        gh_out = env_dir / "gh_output.txt"
         ci_env = env_for(env_dir, {
             "T02_TRUSTED_COMMIT": fake_trusted_commit,
             "GITHUB_RUN_ID": "900001",
             "GITHUB_RUN_ATTEMPT": "1",
             "GITHUB_REF": "refs/tags/t02-sign-rehearsal",
         })
+        first_payload = env_dir / "payload.first.bin"
+        r = run([PY, str(trusted_tree / "t02-ci-payload.py"), "preflight",
+                 "--tag-tree", str(tag_tree), "--trusted-tree", str(trusted_tree),
+                 "--github-output", str(gh_out),
+                 "--payload-out", str(first_payload)], env=ci_env)
+        ok = r.returncode == 0 and first_payload.is_file()
+        record("S1a preflight（雙源比對＋申請檔自洽；生成 pin）", ok,
+               f"rc={r.returncode} payload={sha256_of(first_payload)[:16] if ok else '-'}")
+        if not ok:
+            print(r.stdout[-2000:], r.stderr[-2000:])
+            return finish()
+        pin = {}
+        for line in gh_out.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                pin[key.strip()] = value.strip()
+
+        # ---------- S1b preflight 重跑（模擬 sign job：帶 pin → 位元組必須相同） ----------
         payload_path = env_dir / "payload.bin"
         r = run([PY, str(trusted_tree / "t02-ci-payload.py"), "preflight",
                  "--tag-tree", str(tag_tree), "--trusted-tree", str(trusted_tree),
+                 "--pin-nonce", pin.get("payload_nonce", ""),
+                 "--pin-issued-at", pin.get("payload_issued_at", ""),
                  "--payload-out", str(payload_path)], env=ci_env)
-        ok = r.returncode == 0 and payload_path.is_file()
-        record("S1 preflight（雙源比對＋申請檔自洽 → payload）", ok,
-               f"rc={r.returncode} payload={sha256_of(payload_path)[:16] if ok else '-'}")
-        if not ok:
+        same = (r.returncode == 0 and payload_path.is_file()
+                and sha256_of(first_payload) == sha256_of(payload_path))
+        record("S1b 重跑一致性（pin → 兩次 payload 位元組相同）", same,
+               f"rc={r.returncode} same={same} sha={sha256_of(payload_path)[:16] if payload_path.is_file() else '-'}")
+        if not same:
             print(r.stdout[-2000:], r.stderr[-2000:])
             return finish()
 

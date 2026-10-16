@@ -12,16 +12,16 @@
     "sha256": "94546ccb3cca291b002aad46adf0f8c5176129a6468a38e42edf4a8204ba594b"
   },
   "test-sign-inputs.py": {
-    "bytes": 14382,
-    "sha256": "f0a7e7e309dd3519c944c3b60b8352e05fcd4929a5c5cc195b5ff145229b7d6c"
+    "bytes": 18427,
+    "sha256": "f382f12a25f75c240fded53af9307927fff87e8282bfcbb11be17b95b6579d4e"
   },
   "t02-ci-payload.py": {
-    "bytes": 14327,
-    "sha256": "5d93a4c2169ed3d65c8ab084a2e9fa2ed88ed89ae86fb3612d1c3e57234b3fc9"
+    "bytes": 17626,
+    "sha256": "9210db081d0fa949f0c174be8511cc2366216486865dc0c2ca4f31428e28523c"
   },
   "rehearse-final-chain.py": {
-    "bytes": 15292,
-    "sha256": "499a116f6e27e9667370e427e045b6f1e61ef6dbcc39401d0f11023e289a17e1"
+    "bytes": 16693,
+    "sha256": "4aa95ab9af98a27bf76d7774d9a038056416ba2ccb891543c3a55c7178df196c"
   },
   "install-pubkey.py": {
     "bytes": 6268,
@@ -48,8 +48,8 @@
     "sha256": "525ce3f705d9ea6a43a5a129ec875bd7205ac378c0206331ba358d6265cf7f34"
   },
   "github-actions/t02-sign-receipt.yml": {
-    "bytes": 7644,
-    "sha256": "d0baa3877609b90527d5669cd1176eb625700691a929be01313de30b3233daec"
+    "bytes": 8452,
+    "sha256": "2dfda24bd0a1a355a825484dfacecef250c84a884c953517b5a4afd79c6289ea"
   },
   "tools/t02-keygen.html": {
     "bytes": 5604,

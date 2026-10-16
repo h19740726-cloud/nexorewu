@@ -81,7 +81,8 @@ class SignInputsTest(unittest.TestCase):
             (tree / "T02-sign-request.json").write_text(text, encoding="utf-8")
         self.request = request
 
-    def run_preflight(self, *, trusted_commit=TRUSTED_COMMIT, extra_env=None):
+    def run_preflight(self, *, trusted_commit=TRUSTED_COMMIT, extra_env=None,
+                      github_output=None, extra_args=None, payload_name="payload-out.bin"):
         env = {k: v for k, v in os.environ.items() if not k.startswith("T02_")}
         env.update({
             "T02_TRUSTED_COMMIT": trusted_commit,
@@ -90,12 +91,15 @@ class SignInputsTest(unittest.TestCase):
             "GITHUB_REF": "refs/tags/t02-sign-test",
         })
         env.update(extra_env or {})
-        payload_out = self.root / "payload-out.bin"
+        payload_out = self.root / payload_name
+        cmd = [PY, str(self.trusted_tree / "t02-ci-payload.py"), "preflight",
+               "--tag-tree", str(self.tag_tree), "--trusted-tree", str(self.trusted_tree),
+               "--payload-out", str(payload_out)]
+        if github_output is not None:
+            cmd += ["--github-output", str(github_output)]
+        cmd += list(extra_args or [])
         proc = subprocess.run(
-            [PY, str(self.trusted_tree / "t02-ci-payload.py"), "preflight",
-             "--tag-tree", str(self.tag_tree), "--trusted-tree", str(self.trusted_tree),
-             "--payload-out", str(payload_out)],
-            capture_output=True, text=True, check=False, env=env,
+            cmd, capture_output=True, text=True, check=False, env=env,
         )
         return proc, payload_out
 
@@ -228,7 +232,68 @@ class SignInputsTest(unittest.TestCase):
         self.assertEqual(receipt["schema"], 1)
         self.assertEqual(base64.b64decode(receipt["payload_b64"]), payload_out.read_bytes())
         self.assertEqual(base64.b64decode(receipt["signature_b64"]), b"fake-signature-bytes")
-        self.assertTrue(receipt["key_fingerprint"])
+        self.assertTrue(receipt["key_fingerprint"], "receipt 應帶金鑰指紋")
+
+    # ---------------- 5. 固定化 pin（2026-10-16 TOCTOU 修復） ----------------
+
+    def test_pinned_preflight_reproduces_identical_payload(self):
+        """第二次帶 pin（nonce／issued_at）→ 兩次 payload 位元組相同。
+
+        背景：真實流程中 preflight job 與 sign job 是**兩次獨立執行**；
+        舊版每次生成新 nonce/issued_at，導致防 TOCTOU 比對必然失敗
+        （run 38844329678 實測）。修復＝第一次生成經 GITHUB_OUTPUT 導出、
+        第二次以 --pin-* 重用。
+        """
+        out1 = self.root / "gh-out-1.txt"
+        proc1, payload1 = self.run_preflight(github_output=out1)
+        self.assertEqual(proc1.returncode, 0, proc1.stdout + proc1.stderr)
+        vals = {}
+        for line in out1.read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                vals[key.strip()] = value.strip()
+        self.assertTrue(vals.get("payload_nonce"), vals)
+        self.assertTrue(vals.get("payload_issued_at"), vals)
+        first = payload1.read_bytes()
+
+        out2 = self.root / "gh-out-2.txt"
+        proc2, payload2 = self.run_preflight(
+            github_output=out2,
+            payload_name="payload-out-2.bin",
+            extra_args=["--pin-nonce", vals["payload_nonce"],
+                        "--pin-issued-at", vals["payload_issued_at"]],
+        )
+        self.assertEqual(proc2.returncode, 0, proc2.stdout + proc2.stderr)
+        self.assertEqual(first, payload2.read_bytes(), "帶 pin 重跑必須位元組相同")
+        self.assertEqual(
+            hashlib.sha256(first).hexdigest(),
+            hashlib.sha256(payload2.read_bytes()).hexdigest(),
+        )
+
+    def test_pin_malformed_or_partial_rejected(self):
+        """pin 格式不合法、或只給一半（缺另一個）→ 一律拒絕。"""
+        cases = [
+            ["--pin-nonce", "bad nonce!"],
+            ["--pin-nonce", "short"],
+            ["--pin-issued-at", "not-a-date"],
+            ["--pin-issued-at", "2026-10-16T11:00:00"],
+            ["--pin-issued-at", "2026-10-16T11:00:00+00:00"],
+        ]
+        for args in cases:
+            with self.subTest(args=args):
+                proc, _ = self.run_preflight(extra_args=args)
+                self.assertNotEqual(proc.returncode, 0, f"{args} 應被拒")
+
+    def test_pin_values_enter_payload(self):
+        """合法 pin：值必須原樣進入 payload 的 nonce／issued_at。"""
+        nonce = "FixedNonce_123-abc"
+        issued_at = "2026-10-16T11:00:00+00:00"
+        proc, payload = self.run_preflight(
+            extra_args=["--pin-nonce", nonce, "--pin-issued-at", issued_at])
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        data = json.loads(payload.read_text(encoding="utf-8"))
+        self.assertEqual(data["nonce"], nonce)
+        self.assertEqual(data["issued_at"], issued_at)
 
 
 class WorkflowStructureTest(unittest.TestCase):
@@ -294,7 +359,18 @@ class WorkflowStructureTest(unittest.TestCase):
     def test_preflight_outputs_and_artifact(self):
         self.assertIn("payload_sha256: ${{ steps.pre.outputs.payload_sha256 }}", self.text)
         self.assertIn("actions/upload-artifact@", self.text)
-        self.assertIn("if-no-files-found: error", self.text)
+        self.assertIn("if-no-files-found: error", self.text, "缺檔必須判失敗")
+
+    def test_preflight_pin_flow_wired(self):
+        """2026-10-16 TOCTOU 修復：preflight 導出 pin；sign 重跑以 env 傳入重用。"""
+        self.assertIn("payload_nonce: ${{ steps.pre.outputs.payload_nonce }}", self.text)
+        self.assertIn("payload_issued_at: ${{ steps.pre.outputs.payload_issued_at }}", self.text)
+        self.assertIn("PIN_NONCE: ${{ needs.preflight.outputs.payload_nonce }}", self.text)
+        self.assertIn("PIN_ISSUED_AT: ${{ needs.preflight.outputs.payload_issued_at }}", self.text)
+        self.assertIn('--pin-nonce "$PIN_NONCE"', self.code)
+        self.assertIn('--pin-issued-at "$PIN_ISSUED_AT"', self.code)
+        self.assertEqual(self.code.count("--pin-nonce"), 1, "pin 只應出現在 sign 重跑步驟（恰一次）")
+        self.assertEqual(self.code.count("--pin-issued-at"), 1)
 
     def test_persist_credentials_disabled(self):
         self.assertEqual(
