@@ -83,10 +83,22 @@ def main() -> int:
             return 1
         pub_pem = (keys / "t02-receipt-pub.pem").read_text(encoding="utf-8")
         src = AUDIT.read_text(encoding="utf-8")
-        assert SENTINEL in src, "受驗腳本找不到公鑰常數"
         audit_copy = root / "audit-e2e.py"
-        audit_copy.write_text(src.replace(SENTINEL, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem), 1),
-                              encoding="utf-8")
+        if SENTINEL in src:
+            patched = src.replace(SENTINEL, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem), 1)
+        else:
+            # 雙路相容（2026-10-16）：正式公鑰已安裝 → 整行替換成測試公鑰
+            _lines = []
+            _done = False
+            for _line in src.splitlines(keepends=True):
+                if not _done and _line.startswith("RECEIPT_PUBKEY_PEM = "):
+                    _lines.append("RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem) + "\n")
+                    _done = True
+                else:
+                    _lines.append(_line)
+            assert _done, "受驗腳本找不到公鑰常數（結構已變動）"
+            patched = "".join(_lines)
+        audit_copy.write_text(patched, encoding="utf-8")
         version = hashlib.sha256(audit_copy.read_bytes()).hexdigest()
 
         # E1：建立 pending

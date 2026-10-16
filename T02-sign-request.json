@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "task_id": "T02",
+  "version": "ae945086de9786d26114dbb7a35c02341abd92783dad2097835bfa835035376e",
+  "pending_ids": [
+    "013d9ce10b7e",
+    "02ce2ec81472",
+    "1bd79d0aca7c",
+    "2ae94819a899",
+    "2fcce6dd283a",
+    "35cb99f02cf8",
+    "5249997396af",
+    "56bb4afd191e",
+    "5a79712ab238",
+    "91ebcad26a36",
+    "9e214e94e8a7",
+    "ab7ddd3b04d1",
+    "b30532701e6d",
+    "c047d8a2866f",
+    "cf6fd5c549e6",
+    "d7fecaef7aa8",
+    "dbc5b1117f86",
+    "e33fb44be75f",
+    "e3d63019d981",
+    "eb46f38833d4",
+    "f4f056fa90b9"
+  ],
+  "result_path": "T02-sign-verdict.md",
+  "result_sha256": "db98926b4a16eda8e675b21b6109b39d988460a313a48f71b6aaa689d83b0354"
+}

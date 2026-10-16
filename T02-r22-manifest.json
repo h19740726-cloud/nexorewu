@@ -1,11 +1,11 @@
 {
   "T02-discipline-audit.py": {
-    "bytes": 78539,
-    "sha256": "bbcbb49c5a7436509c549e0df2bacc411d5c5edf20247c2b9141cd17c3b75a28"
+    "bytes": 78721,
+    "sha256": "ae945086de9786d26114dbb7a35c02341abd92783dad2097835bfa835035376e"
   },
   "test_T02_discipline_audit.py": {
-    "bytes": 141873,
-    "sha256": "701a7ae890c9dedfd8f95c98b83c261a9dadd3b5b27f64836e9654d7872f85f1"
+    "bytes": 143214,
+    "sha256": "0a026394b03f16cab6d24abd17e59c2a61d152d45d06ccd662cec15774b10f80"
   },
   "mutate12.py": {
     "bytes": 19627,
@@ -20,8 +20,8 @@
     "sha256": "5d93a4c2169ed3d65c8ab084a2e9fa2ed88ed89ae86fb3612d1c3e57234b3fc9"
   },
   "rehearse-final-chain.py": {
-    "bytes": 14788,
-    "sha256": "af817e01b882bf9f78cace1ed3a09b91e50fd2ce6810a29db522a84e3844ec52"
+    "bytes": 15292,
+    "sha256": "499a116f6e27e9667370e427e045b6f1e61ef6dbcc39401d0f11023e289a17e1"
   },
   "install-pubkey.py": {
     "bytes": 6268,
@@ -40,12 +40,12 @@
     "sha256": "c128c49689f3c9c98129d69eb8d95b9d884bb79cdd2eda1b4035f288752551ee"
   },
   "e2e12.py": {
-    "bytes": 7280,
-    "sha256": "f9cff20634f6454e67f77c0b9152fa2a24c48d097d2d0b51037c729b2e25bfb9"
+    "bytes": 7840,
+    "sha256": "dd295c09fc0f67b517fef5455d87d260909ded9b2a0bbaf308d3ffd52653db4a"
   },
   "repro-round2.py": {
-    "bytes": 9088,
-    "sha256": "f02688e403cae7e75263bcc662fcc5e346a60ca71cb35604d1f0a74d28a17121"
+    "bytes": 9649,
+    "sha256": "525ce3f705d9ea6a43a5a129ec875bd7205ac378c0206331ba358d6265cf7f34"
   },
   "github-actions/t02-sign-receipt.yml": {
     "bytes": 7644,
@@ -54,5 +54,13 @@
   "tools/t02-keygen.html": {
     "bytes": 5604,
     "sha256": "da51e17be9f85daf8281cd28c3d43a4a1648fdfefe5fd287c458b56568a5d4c9"
+  },
+  "T02-sign-request.json": {
+    "bytes": 689,
+    "sha256": "65dbd7a7c950a91db9f397c08222c957513a3e5127e4e7599022c6a904b41da4"
+  },
+  "T02-sign-verdict.md": {
+    "bytes": 990,
+    "sha256": "db98926b4a16eda8e675b21b6109b39d988460a313a48f71b6aaa689d83b0354"
   }
 }

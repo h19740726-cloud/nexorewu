@@ -111,10 +111,22 @@ def main() -> int:
         priv = keys / "t02-receipt-priv.pem"
 
         src = AUDIT.read_text(encoding="utf-8")
-        assert SENTINEL in src, "受驗腳本找不到公鑰常數"
         audit = root / "audit-repro.py"
-        audit.write_text(src.replace(SENTINEL, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub), 1),
-                         encoding="utf-8")
+        if SENTINEL in src:
+            patched = src.replace(SENTINEL, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub), 1)
+        else:
+            # 雙路相容（2026-10-16）：正式公鑰已安裝 → 整行替換成測試公鑰
+            _lines = []
+            _done = False
+            for _line in src.splitlines(keepends=True):
+                if not _done and _line.startswith("RECEIPT_PUBKEY_PEM = "):
+                    _lines.append("RECEIPT_PUBKEY_PEM = " + json.dumps(pub) + "\n")
+                    _done = True
+                else:
+                    _lines.append(_line)
+            assert _done, "受驗腳本找不到公鑰常數（結構已變動）"
+            patched = "".join(_lines)
+        audit.write_text(patched, encoding="utf-8")
         version = hashlib.sha256(audit.read_bytes()).hexdigest()
 
         # ---- A1：receipt 版本與執行檔不符，省略 --version ----

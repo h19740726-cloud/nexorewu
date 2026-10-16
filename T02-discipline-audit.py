@@ -175,7 +175,7 @@ TASKS_DIR = Path(
 #    - 驗簽用 `openssl dgst -sha256 -verify`（macOS 內建 LibreSSL，無須第三方套件）。
 #    - ⚠️ 本檔若被改動（例如換成攻擊者的公鑰），**腳本 SHA256 會變**，
 #      由「獨立驗收」核對受驗版本雜湊把關（第 11 輪 §1 版本硬門檻）。
-RECEIPT_PUBKEY_PEM = ""
+RECEIPT_PUBKEY_PEM = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBkSCHAzg2JOQeZjtJtqipXNOd3mG\nNqP9JcM7Lb8bBX5Y8tEEbDQXR2LOEv9bX3OF/Q/XwMlW4QfNxkaKNSXVeA==\n-----END PUBLIC KEY-----\n"
 
 # 🔴 第 13 輪（對應第 2 輪 A 組 §5 第 1 條）：受驗執行檔自身的 SHA256＝**版本綁定的權威值**。
 #    receipt 的 `version`、驗收結果檔宣告的版本，都必須等於本值；且**不因省略 --version 而略過**

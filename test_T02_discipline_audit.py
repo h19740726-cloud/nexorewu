@@ -102,16 +102,32 @@ def make_receipt(priv_path: Path, workdir: Path, payload: dict, pub_pem: str) ->
 
 
 def patched_script(dest_dir: Path, pubkey_pem: str) -> Path:
-    """複製受驗腳本，**只把內嵌公鑰常數換成測試公鑰**（受驗本體一行不動）。
+    """複製受驗腳本，**把公鑰常數換成測試公鑰**（受驗本體其餘一行不動）。
 
     公鑰是寫死的常數，測試不可能在不改腳本的情況下換金鑰；因此測試改的是
     **自己的副本**（只替換那一行），受驗腳本本體與其 SHA256 完全不變。
+
+    🔴 最終輪（雙路相容，2026-10-16）：支援兩種受驗狀態——
+      - 未安裝（常數為 `""`）：替換 sentinel（原有路徑）；
+      - 已安裝（常數為非空 PEM）：整行替換成測試公鑰。
+    ⇒ 正式公鑰安裝（C0b）後，本測試套件仍可全套運行。
     """
     src = SCRIPT.read_text(encoding="utf-8")
     sentinel = 'RECEIPT_PUBKEY_PEM = ""'
-    if sentinel not in src:
-        raise AssertionError("受驗腳本找不到內嵌公鑰常數（結構已變動，測試需同步）")
-    patched = src.replace(sentinel, "RECEIPT_PUBKEY_PEM = " + json.dumps(pubkey_pem), 1)
+    if sentinel in src:
+        patched = src.replace(sentinel, "RECEIPT_PUBKEY_PEM = " + json.dumps(pubkey_pem), 1)
+    else:
+        lines = []
+        replaced = False
+        for line in src.splitlines(keepends=True):
+            if not replaced and line.startswith("RECEIPT_PUBKEY_PEM = "):
+                lines.append("RECEIPT_PUBKEY_PEM = " + json.dumps(pubkey_pem) + "\n")
+                replaced = True
+            else:
+                lines.append(line)
+        if not replaced:
+            raise AssertionError("受驗腳本找不到公鑰常數（結構已變動，測試需同步）")
+        patched = "".join(lines)
     out = dest_dir / "T02-audit-with-testkey.py"
     out.write_text(patched, encoding="utf-8")
     return out
@@ -1438,17 +1454,29 @@ class DisciplineAuditTest(unittest.TestCase):
         self.assertIn("簽章", refused.stderr)
 
     def test_r12_c_uninstalled_pubkey_rejects_all_clears(self):
-        """🔴 §5 第 3 條：**公鑰未安裝**（原腳本 `RECEIPT_PUBKEY_PEM` 為空）→ 一律拒絕所有清除。"""
-        self.assertIn(
-            'RECEIPT_PUBKEY_PEM = ""',
-            SCRIPT.read_text(encoding="utf-8"),
-            "本測試的前提是原受驗腳本尚未安裝公鑰；安裝後請改用「清空公鑰的副本」來測。",
-        )
+        """🔴 §5 第 3 條：**公鑰未安裝**（常數為空）→ 一律拒絕所有清除。
+
+        🔴 最終輪（雙路相容，2026-10-16）：以「公鑰清空的副本」做未安裝情境——
+        對原腳本的安裝狀態免疫（原檔為空或已安裝，本條都能測到「未安裝守門」）。
+        """
+        src = (_ACTIVE_SCRIPT or SCRIPT).read_text(encoding="utf-8")
+        patched_lines = []
+        replaced = False
+        for line in src.splitlines(keepends=True):
+            if not replaced and line.startswith("RECEIPT_PUBKEY_PEM = "):
+                patched_lines.append('RECEIPT_PUBKEY_PEM = ""\n')
+                replaced = True
+            else:
+                patched_lines.append(line)
+        self.assertTrue(replaced, "受驗腳本找不到公鑰常數（結構已變動，測試需同步）")
+        no_key_script = self.root / "audit-no-key-r12c.py"
+        no_key_script.write_text("".join(patched_lines), encoding="utf-8")
+
         self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
         verdict = self.root / "v.md"
         self.write_verdict(verdict, "test-card", script_version())
         refused = self.run_cli_raw(
-            SCRIPT, "--clear", "test-card", "--result", str(verdict), "--version", script_version(),
+            no_key_script, "--clear", "test-card", "--result", str(verdict), "--version", script_version(),
             "--by", "codex",
         )
         self.assertNotEqual(refused.returncode, 0)

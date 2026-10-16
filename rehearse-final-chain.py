@@ -77,8 +77,20 @@ def make_transcript(root: pathlib.Path) -> pathlib.Path:
 def build_audit_with_test_pubkey(src: pathlib.Path, dst: pathlib.Path, pub_pem: str) -> str:
     text = src.read_text(encoding="utf-8")
     sentinel = 'RECEIPT_PUBKEY_PEM = ""'
-    assert sentinel in text, "受驗稽核器找不到公鑰常數（sentinel）"
-    replaced = text.replace(sentinel, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem), 1)
+    if sentinel in text:
+        replaced = text.replace(sentinel, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem), 1)
+    else:
+        # 雙路相容（2026-10-16）：正式公鑰已安裝 → 整行替換成測試公鑰
+        _lines = []
+        _done = False
+        for _line in text.splitlines(keepends=True):
+            if not _done and _line.startswith("RECEIPT_PUBKEY_PEM = "):
+                _lines.append("RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem) + "\n")
+                _done = True
+            else:
+                _lines.append(_line)
+        assert _done, "受驗稽核器找不到公鑰常數（結構已變動）"
+        replaced = "".join(_lines)
     dst.write_text(replaced, encoding="utf-8")
     return sha256_of(dst)
 

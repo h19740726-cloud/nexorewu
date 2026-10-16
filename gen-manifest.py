@@ -40,7 +40,7 @@ FILES = [
 # 這兩項在「公鑰安裝後」才定稿（version 綁定最終稽核器 SHA），屬 C0b 內容。
 OPTIONAL_FILES = [
     "T02-sign-request.json",
-    "T02-DEMO-verdict.md",
+    "T02-sign-verdict.md",
 ]
 
 
