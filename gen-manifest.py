@@ -31,6 +31,9 @@ FILES = [
     # 既有端到端工具
     "e2e12.py",
     "repro-round2.py",
+    # C0c 遷移工具與歸檔（Codex 2026-10-16 整改第 1、2 條）
+    "migrate-legacy-pending.py",
+    "T02-legacy-pending-archive.json",
     # workflow 權威副本與 keygen
     "github-actions/t02-sign-receipt.yml",
     "tools/t02-keygen.html",

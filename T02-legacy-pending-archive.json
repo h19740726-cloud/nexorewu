@@ -1,0 +1,280 @@
+{
+  "schema": 1,
+  "migration": {
+    "date": "2026-10-16 18:38",
+    "reason": "Codex 2026-10-16 獨立驗收整改第 1、2 條：malformed（task_id 空）的歷史記錄（2026-10-12~10-13 施工早期、稽核器尚無法解析卡號時逐輪寫入）原樣移入本歸檔檔；主 store 只保留可識別卡號的記錄。不改語義、不刪除。",
+    "source_store_sha256_before": "2bc87337e858da0ee05ea2eb86e684515bef26b78dfc03c8a2808bf223ba87d9",
+    "migrated_count": 21,
+    "kept_t02_count": 21,
+    "kept_other_count": 0,
+    "migrated_keys": [
+      "01a12e14-a6f3-72c3-b433-077f026999f0",
+      "01a12e37-e2b0-7f50-85aa-65a32b211258",
+      "01a12e3c-386a-7557-98b6-3e994578d5e8",
+      "01a12e7a-afee-7077-b60c-30f2c3ac353c",
+      "01a12f0a-89f3-7963-b3b0-e8351df70aab",
+      "01a12f64-1e68-7d40-a4fa-ec1879120bd5",
+      "01a12f6b-dc6a-72ef-8c8f-8368bf7c8a84",
+      "01a12f70-441d-7752-8a79-7ccc9fa53359",
+      "01a12f82-c63a-703f-83f5-0d88da64b732",
+      "01a12f9d-8a0c-73da-b880-79d6ff4fef27",
+      "01a12fad-2ac8-759d-96f9-a5cae6bb32db",
+      "01a12fe7-e222-7666-83ff-eb66de56e4ba",
+      "01a13072-8832-7749-bda8-d666761cecd0",
+      "01a13076-8b44-7d9c-83db-e7bb9f72f99d",
+      "01a13079-23b2-7d38-a2db-d7f531a50297",
+      "01a13086-c517-7521-bfe3-8e4557e55fc8",
+      "01a130b0-ae0d-79bf-9042-12458204f2f6",
+      "01a130b4-6e63-7ff2-9e0a-b55e6541881f",
+      "01a130dd-3082-7203-a968-c7ecc2a6abfd",
+      "01a130e9-b9f9-7259-82e7-d8743061dc00",
+      "01a130f4-0c40-7675-afbc-a349c987b64c"
+    ]
+  },
+  "entries": {
+    "01a12e14-a6f3-72c3-b433-077f026999f0": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "rules": [
+        "Skill 晚於第一則回覆或第一個修改工具：daqiang-work-discipline、prework-anti-fake-completion"
+      ],
+      "session_id": "f8f8a209-5301-45e2-b8d3-99de28675bbe",
+      "updated": "2026-10-12T11:17:21+08:00",
+      "cleared_by": ""
+    },
+    "01a12e37-e2b0-7f50-85aa-65a32b211258": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "Skill 晚於第一則回覆或第一個修改工具：prework-anti-fake-completion"
+      ],
+      "session_id": "f8f8a209-5301-45e2-b8d3-99de28675bbe",
+      "updated": "2026-10-12T11:47:38+08:00",
+      "cleared_by": ""
+    },
+    "01a12e3c-386a-7557-98b6-3e994578d5e8": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "Skill 晚於第一則回覆或第一個修改工具：daqiang-work-discipline、prework-anti-fake-completion"
+      ],
+      "session_id": "e494d72a-e131-4277-9239-86eb1cf9fde5",
+      "updated": "2026-10-12T11:54:54+08:00",
+      "cleared_by": ""
+    },
+    "01a12e7a-afee-7077-b60c-30f2c3ac353c": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "缺少已完成的 Skill 載入：daqiang-work-discipline、prework-anti-fake-completion",
+        "無法確定當前卡號，且存在未清除的 pending：保守拒絕"
+      ],
+      "session_id": "856f96d0-7853-4e54-bda1-d0c8c2f78b70",
+      "updated": "2026-10-12T13:00:36+08:00",
+      "cleared_by": ""
+    },
+    "01a12f0a-89f3-7963-b3b0-e8351df70aab": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "缺少已完成的 Skill 載入：daqiang-interaction-method",
+        "無法確定當前卡號，且存在未清除的 pending：保守拒絕"
+      ],
+      "session_id": "cf53b83b-66ad-486f-aec3-8316f8703171",
+      "updated": "2026-10-12T15:36:34+08:00",
+      "cleared_by": ""
+    },
+    "01a12f64-1e68-7d40-a4fa-ec1879120bd5": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "Skill 晚於第一則回覆或第一個修改工具：daqiang-work-discipline、prework-anti-fake-completion",
+        "無法確定當前卡號，且存在未清除的 pending：保守拒絕"
+      ],
+      "session_id": "6dceb069-6031-4052-a152-b2babd57dcc2",
+      "updated": "2026-10-12T17:14:35+08:00",
+      "cleared_by": ""
+    },
+    "01a12f6b-dc6a-72ef-8c8f-8368bf7c8a84": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "Skill 晚於第一則回覆或第一個修改工具：daqiang-work-discipline、prework-anti-fake-completion",
+        "無法確定當前卡號，且存在未清除的 pending：保守拒絕"
+      ],
+      "session_id": "6dceb069-6031-4052-a152-b2babd57dcc2",
+      "updated": "2026-10-12T17:25:25+08:00",
+      "cleared_by": ""
+    },
+    "01a12f70-441d-7752-8a79-7ccc9fa53359": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "無法確定當前卡號，且存在未清除的 pending：保守拒絕"
+      ],
+      "session_id": "6dceb069-6031-4052-a152-b2babd57dcc2",
+      "updated": "2026-10-12T17:28:03+08:00",
+      "cleared_by": ""
+    },
+    "01a12f82-c63a-703f-83f5-0d88da64b732": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "6dceb069-6031-4052-a152-b2babd57dcc2",
+      "updated": "2026-10-12T18:17:46+08:00",
+      "cleared_by": ""
+    },
+    "01a12f9d-8a0c-73da-b880-79d6ff4fef27": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "b3533f09-fe5c-4946-a299-ec94ef1bb095",
+      "updated": "2026-10-12T18:20:04+08:00",
+      "cleared_by": ""
+    },
+    "01a12fad-2ac8-759d-96f9-a5cae6bb32db": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "缺少已完成的 Skill 載入：daqiang-interaction-method",
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "5f2d09e2-b218-4ed1-bc96-40eec45654c1",
+      "updated": "2026-10-12T18:34:50+08:00",
+      "cleared_by": ""
+    },
+    "01a12fe7-e222-7666-83ff-eb66de56e4ba": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "缺少已完成的 Skill 載入：daqiang-interaction-method",
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "5f2d09e2-b218-4ed1-bc96-40eec45654c1",
+      "updated": "2026-10-12T19:38:17+08:00",
+      "cleared_by": ""
+    },
+    "01a13072-8832-7749-bda8-d666761cecd0": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "f8f8a209-5301-45e2-b8d3-99de28675bbe",
+      "updated": "2026-10-12T22:11:00+08:00",
+      "cleared_by": ""
+    },
+    "01a13076-8b44-7d9c-83db-e7bb9f72f99d": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "0d6eaf55-58fb-4e98-ac3b-7660455505f2",
+      "updated": "2026-10-12T22:15:49+08:00",
+      "cleared_by": ""
+    },
+    "01a13079-23b2-7d38-a2db-d7f531a50297": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "f8f8a209-5301-45e2-b8d3-99de28675bbe",
+      "updated": "2026-10-12T22:19:07+08:00",
+      "cleared_by": ""
+    },
+    "01a13086-c517-7521-bfe3-8e4557e55fc8": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "缺少已完成的 Skill 載入：daqiang-interaction-method",
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "02424076-933f-4e37-8188-dcadcd4e521c",
+      "updated": "2026-10-12T22:32:07+08:00",
+      "cleared_by": ""
+    },
+    "01a130b0-ae0d-79bf-9042-12458204f2f6": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "缺少已完成的 Skill 載入：daqiang-work-discipline、prework-anti-fake-completion",
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "56701ff0-e27a-4b32-ba59-a1e1ae95adf7",
+      "updated": "2026-10-12T23:18:18+08:00",
+      "cleared_by": ""
+    },
+    "01a130b4-6e63-7ff2-9e0a-b55e6541881f": {
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "Skill 晚於第一則回覆或第一個修改工具：daqiang-work-discipline、prework-anti-fake-completion",
+        "無法確定當前卡號：宿主未提供可驗證的 task/card identity，且本輪無明確卡號宣告。保守拒絕完成"
+      ],
+      "session_id": "03547711-fe07-4fee-90dc-dd1d59adb970",
+      "updated": "2026-10-12T23:34:47+08:00",
+      "cleared_by": ""
+    },
+    "01a130dd-3082-7203-a968-c7ecc2a6abfd": {
+      "pending_id": "db2597281980",
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "無法確定當前卡號：本輪沒有可信 identity 來源（宿主未提供 event.task_id／card_id，且未設定 T02_TASK_ID）。user 訊息文字不構成身分，保守拒絕完成"
+      ],
+      "session_id": "80df8bac-0255-406b-9072-7916cfc16eaa",
+      "updated": "2026-10-13T00:06:46+08:00",
+      "cleared_by": ""
+    },
+    "01a130e9-b9f9-7259-82e7-d8743061dc00": {
+      "pending_id": "f0e20799a530",
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "缺少已完成的 Skill 載入：daqiang-interaction-method",
+        "無法確定當前卡號：本輪沒有可信 identity 來源（宿主未提供 event.task_id／card_id，且未設定 T02_TASK_ID）。user 訊息文字不構成身分，保守拒絕完成"
+      ],
+      "session_id": "428d8d9e-38a9-4ac4-bbc6-76aca2c57d7d",
+      "updated": "2026-10-13T00:20:02+08:00",
+      "cleared_by": ""
+    },
+    "01a130f4-0c40-7675-afbc-a349c987b64c": {
+      "pending_id": "f4d16b7065b0",
+      "task_status": "進行中",
+      "completion_allowed": false,
+      "task_id": "",
+      "rules": [
+        "缺少已完成的 Skill 載入：daqiang-work-discipline、prework-anti-fake-completion",
+        "無法確定當前卡號：本輪沒有可信 identity 來源（宿主未提供 event.task_id／card_id，且未設定 T02_TASK_ID）。user 訊息文字不構成身分，保守拒絕完成"
+      ],
+      "session_id": "f8f8a209-5301-45e2-b8d3-99de28675bbe",
+      "updated": "2026-10-13T00:31:52+08:00",
+      "cleared_by": ""
+    }
+  }
+}

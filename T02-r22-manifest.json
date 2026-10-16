@@ -47,6 +47,14 @@
     "bytes": 9649,
     "sha256": "525ce3f705d9ea6a43a5a129ec875bd7205ac378c0206331ba358d6265cf7f34"
   },
+  "migrate-legacy-pending.py": {
+    "bytes": 5195,
+    "sha256": "366a621b118de21db2a1c8a314f2acb2659b1f381536a2a42cb7e239e200da39"
+  },
+  "T02-legacy-pending-archive.json": {
+    "bytes": 11645,
+    "sha256": "a11d092ebff8c9c1733c9d8e4b94816f38a7d92458c0e25d417b5cdf0b08443d"
+  },
   "github-actions/t02-sign-receipt.yml": {
     "bytes": 8452,
     "sha256": "2dfda24bd0a1a355a825484dfacecef250c84a884c953517b5a4afd79c6289ea"
@@ -57,10 +65,10 @@
   },
   "T02-sign-request.json": {
     "bytes": 689,
-    "sha256": "65dbd7a7c950a91db9f397c08222c957513a3e5127e4e7599022c6a904b41da4"
+    "sha256": "4b1fabe09e8bc790e02f43403add64a6e23c2f5c733ae7f30bfe18400a4b5e0d"
   },
   "T02-sign-verdict.md": {
-    "bytes": 990,
-    "sha256": "db98926b4a16eda8e675b21b6109b39d988460a313a48f71b6aaa689d83b0354"
+    "bytes": 1528,
+    "sha256": "53ed7de7e3306f9baea7a192aa98a7e8b3ee9a75b3776c0713e4374c7d62aba4"
   }
 }
