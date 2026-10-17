@@ -45,6 +45,12 @@
   - 兩組的紅燈互補且不散射（r22_a 不受 M17 影響、r22_b／c 不受 M16 影響、
     r22_d 兩組皆綠＝CLI 向量不在這兩條突變的路徑上），已在實作前以徒手探針驗證。
   全量 17 組。
+
+🔴 C0d 同步（2026-10-17）：受驗稽核器的信任根驗證已重構為通用
+  `verify_signed_document()`（Codex C0d 施工引入，收據／核准共用）⇒ 下列五組的
+  find 字串同步至**現行碼形**（M1／M2／M7 改咬通用函式內的三道守門；
+  M16／M17 改在 `verify_receipt()` 的呼叫前注入覆寫）；**缺陷語義與預期紅燈不變**。
+  未同步時五組均為「<字串未命中>」（2026-10-17 實測五組全數命中斷點）。
 """
 from __future__ import annotations
 
@@ -70,15 +76,20 @@ TESTMOD = "test_T02_discipline_audit"
 MUTATIONS = [
     (
         "M1_stop_signature_check",
-        "    if not openssl_verify(payload_bytes, signature, RECEIPT_PUBKEY_PEM):",
-        "    if False and not openssl_verify(payload_bytes, signature, RECEIPT_PUBKEY_PEM):",
+        "    if not openssl_verify(payload_bytes, signature, pubkey_pem):",
+        "    if False and not openssl_verify(payload_bytes, signature, pubkey_pem):",
         ["test_r12_b2_tampered_payload_is_rejected", "test_r17_b1_signature_failure_leaves_pending_intact"],
     ),
     (
         "M2_stop_fingerprint_check",
-        "    if fp != expected_fp:",
-        "    if False and fp != expected_fp:",
-        ["test_r12_i_wrong_fingerprint_is_rejected"],
+        '    if str(raw.get("key_fingerprint") or "") != pubkey_fingerprint(pubkey_pem):',
+        '    if False and str(raw.get("key_fingerprint") or "") != pubkey_fingerprint(pubkey_pem):',
+        [
+            "test_r12_i_wrong_fingerprint_is_rejected",
+            # 🔴 C0d 同步（2026-10-17）：本突變關的是**收據／核准共用**的指紋守門；
+            #    C0d 反例的偽造核准一路正斷言拒絕語「公鑰指紋」⇒ 守門被關時同轉紅，屬預期。
+            "test_c0d_workbuddy_cannot_self_clear_or_forge_independent_approval",
+        ],
     ),
     (
         "M3_stop_nonce_replay_check",
@@ -111,8 +122,8 @@ MUTATIONS = [
     ),
     (
         "M7_stop_pubkey_installed_guard",
-        "    if not RECEIPT_PUBKEY_PEM.strip():",
-        "    if False:",
+        "    if not pubkey_pem.strip():",
+        "    if False and not pubkey_pem.strip():",
         [
             "test_r12_c_uninstalled_pubkey_rejects_all_clears",
             # 最終輪同步：r22_e 同樣斷言「尚未安裝守門」（M7 關掉它時應一併轉紅）。
@@ -214,12 +225,14 @@ MUTATIONS = [
         # 對應 r22_a（env 向量反例）與 r22_e（未安裝時對 env 免疫）。
         # r22_b／c／d 綠＝正確（它們測的是檔案與 CLI 向量，本突變不涉及）。
         "M16_trustroot_env_override",
-        '    if not RECEIPT_PUBKEY_PEM.strip():\n        return None, "尚未安裝核定公鑰',
+        '    return verify_signed_document(\n        receipt_path,\n        RECEIPT_PUBKEY_PEM,\n        "receipt",',
         (
             '    if os.environ.get("T02_RECEIPT_PUBKEY"):\n'
             '        globals()["RECEIPT_PUBKEY_PEM"] = os.environ["T02_RECEIPT_PUBKEY"]\n'
-            '    if not RECEIPT_PUBKEY_PEM.strip():\n'
-            '        return None, "尚未安裝核定公鑰'
+            '    return verify_signed_document(\n'
+            '        receipt_path,\n'
+            '        RECEIPT_PUBKEY_PEM,\n'
+            '        "receipt",'
         ),
         [
             "test_r22_a_env_vars_cannot_replace_trust_root",
@@ -231,14 +244,16 @@ MUTATIONS = [
         # 對應 r22_b（cwd 向量）、r22_c（腳本目錄向量）與 r22_e（未安裝時對檔案免疫）。
         # r22_a／d 綠＝正確（env 與 CLI 向量，本突變不涉及）。
         "M17_trustroot_file_fallback",
-        '    if not RECEIPT_PUBKEY_PEM.strip():\n        return None, "尚未安裝核定公鑰',
+        '    return verify_signed_document(\n        receipt_path,\n        RECEIPT_PUBKEY_PEM,\n        "receipt",',
         (
             '    for _fallback in (Path.cwd() / "pub.pem", SELF_ARTIFACT_PATH.parent / "pub.pem"):\n'
             '        if _fallback.is_file():\n'
             '            globals()["RECEIPT_PUBKEY_PEM"] = _fallback.read_text(encoding="utf-8")\n'
             '            break\n'
-            '    if not RECEIPT_PUBKEY_PEM.strip():\n'
-            '        return None, "尚未安裝核定公鑰'
+            '    return verify_signed_document(\n'
+            '        receipt_path,\n'
+            '        RECEIPT_PUBKEY_PEM,\n'
+            '        "receipt",'
         ),
         [
             "test_r22_b_cwd_files_cannot_replace_trust_root",

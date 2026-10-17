@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "task_id": "T02",
-  "version": "ae945086de9786d26114dbb7a35c02341abd92783dad2097835bfa835035376e",
+  "version": "ae79a6a25fff4b26aecbf7f0acc42f5d5c24706c3eeb460b610d19bf157c7671",
   "pending_ids": [
     "013d9ce10b7e",
     "02ce2ec81472",
@@ -26,5 +26,5 @@
     "f4f056fa90b9"
   ],
   "result_path": "T02-sign-verdict.md",
-  "result_sha256": "53ed7de7e3306f9baea7a192aa98a7e8b3ee9a75b3776c0713e4374c7d62aba4"
+  "result_sha256": "db73a3d8cbaea8069a00be1a391ea3c8dc8e636031d042b1a7d56faf249c47da"
 }

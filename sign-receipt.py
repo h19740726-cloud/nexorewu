@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
-"""用私鑰簽發一份 T02 核定 receipt。
+"""用私鑰簽發一份 T02 核定 receipt（或：獨立核准文件）。
 
-用法：
+用法（receipt 模式）：
     python3 sign-receipt.py --key <priv.pem> --task-id T02 --version <受驗腳本S256> \
         --result <驗收結果檔> --receipt-out <receipt.json> \
         [--pending-ids a,b,c] [--nonce <hex>] [--issued-at <iso>]
+
+用法（獨立核准模式；C0d 雙簽第二信任根）：
+    python3 sign-receipt.py --key <核准私鑰.pem> --approval-of <receipt.json> \
+        --receipt-out <approval.json>
 
 - `--pending-ids` 省略時 → 讀 pending 存放區（`T02_PENDING_PATH`）自動算；僅本機可行。
   外部主體（GitHub Actions）**必須**明確傳入。
 - payload 的正規化形式**直接 import 自受驗腳本**（單一真相源），
   避免簽端與驗端各寫一份而位元組不一致。
+- 🔴 核准模式的 payload 精確綁定：`task_id`／`version`／`pending_ids`／
+  `result_sha256`／`receipt_sha256`／`receipt_nonce`（六欄契約，同稽核器比對表）。
 
-🔴 私鑰只在外部主體手中；本機（產出者）拿不到 → 無法自行簽發 receipt。
+🔴 私鑰只在外部主體手中；本機（產出者）拿不到 → 無法自行簽發 receipt 或核准。
 """
 from __future__ import annotations
 
@@ -62,21 +68,90 @@ def collect_pending_ids(pending_path: pathlib.Path, task_id: str) -> list[str]:
     return sorted(i for i in ids if i)
 
 
+def sign_approval(args: argparse.Namespace, audit) -> int:
+    """簽發「獨立核准」文件：精確綁定指定 receipt（六欄契約）。"""
+    receipt_path = pathlib.Path(args.approval_of)
+    if not receipt_path.is_file():
+        print(f"sign refused: receipt 不存在：{receipt_path}", file=sys.stderr)
+        return 3
+    try:
+        raw = json.loads(receipt_path.read_text(encoding="utf-8"))
+        receipt_payload = json.loads(base64.b64decode(str(raw["payload_b64"])).decode("utf-8"))
+        payload = {
+            "task_id": receipt_payload["task_id"],
+            "version": receipt_payload["version"],
+            "pending_ids": receipt_payload["pending_ids"],
+            "result_sha256": receipt_payload["result_sha256"],
+            "receipt_sha256": hashlib.sha256(receipt_path.read_bytes()).hexdigest(),
+            "receipt_nonce": receipt_payload["nonce"],
+        }
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        print(f"sign refused: receipt 無法解析：{exc}", file=sys.stderr)
+        return 3
+    data = audit.canonical_payload(payload)
+
+    priv_path = pathlib.Path(args.key)
+    if not priv_path.is_file():
+        print(f"sign refused: 私鑰不存在：{priv_path}", file=sys.stderr)
+        return 3
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmpdir = pathlib.Path(tmp)
+        data_file = tmpdir / "payload.bin"
+        sig_file = tmpdir / "sig.bin"
+        data_file.write_bytes(data)
+        subprocess.run(
+            [OPENSSL, "dgst", "-sha256", "-sign", str(priv_path), "-out", str(sig_file), str(data_file)],
+            check=True,
+        )
+        signature = sig_file.read_bytes()
+
+    pub_pem = derive_public_pem(priv_path)
+    approval = {
+        "schema": 1,
+        "payload_b64": base64.b64encode(data).decode("ascii"),
+        "signature_b64": base64.b64encode(signature).decode("ascii"),
+        "key_fingerprint": audit.pubkey_fingerprint(pub_pem),
+    }
+    out_path = pathlib.Path(args.receipt_out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(approval, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+    print(f"獨立核准已簽發：{out_path}")
+    print(f"  task_id        = {payload['task_id']}")
+    print(f"  version        = {payload['version']}")
+    print(f"  pending_ids    = {payload['pending_ids']}")
+    print(f"  result_sha256  = {payload['result_sha256']}")
+    print(f"  receipt_sha256 = {payload['receipt_sha256']}")
+    print(f"  receipt_nonce  = {payload['receipt_nonce']}")
+    print(f"  fingerprint    = {approval['key_fingerprint']}")
+    return 0
+
+
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="簽發 T02 核定 receipt")
+    parser = argparse.ArgumentParser(description="簽發 T02 核定 receipt（或獨立核准）")
     parser.add_argument("--key", required=True, help="私鑰 PEM 路徑（外部主體持有）")
-    parser.add_argument("--task-id", required=True)
-    parser.add_argument("--version", required=True, help="受驗腳本 SHA256")
+    parser.add_argument("--task-id", default="")
+    parser.add_argument("--version", default="", help="受驗腳本 SHA256")
     parser.add_argument("--result", default="", help="驗收結果檔路徑（取其 SHA256）")
     parser.add_argument("--result-sha256", dest="result_sha256", default="",
                         help="直接給驗收結果的 SHA256（外部主體沒有檔案時用）")
-    parser.add_argument("--receipt-out", required=True, help="receipt 輸出檔路徑")
+    parser.add_argument("--receipt-out", required=True, help="輸出檔路徑（receipt 或核准）")
     parser.add_argument("--pending-ids", default="", help="逗號分隔；省略＝讀 pending 存放區")
     parser.add_argument("--nonce", default="", help="省略＝自動產生 uuid")
     parser.add_argument("--issued-at", default="", help="省略＝現在時間（UTC）")
+    parser.add_argument("--approval-of", default="",
+                        help="獨立核准模式：綁定指定 receipt 檔（以 --key 之核准私鑰簽發）")
     args = parser.parse_args(argv[1:])
 
     audit = load_audit_module()
+
+    if args.approval_of:
+        return sign_approval(args, audit)
+
+    if not args.task_id or not args.version:
+        print("sign refused: 必須給 --task-id 與 --version（或改用 --approval-of）", file=sys.stderr)
+        return 2
 
     if args.pending_ids.strip():
         pending_ids = [s for s in (x.strip() for x in args.pending_ids.split(",")) if s]

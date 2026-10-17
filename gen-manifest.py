@@ -34,6 +34,11 @@ FILES = [
     # C0c 遷移工具與歸檔（Codex 2026-10-16 整改第 1、2 條）
     "migrate-legacy-pending.py",
     "T02-legacy-pending-archive.json",
+    # C0d 獨立核准（第二信任根；Codex 2026-10-17 交接）＋安裝與反例工具
+    "T02-c0d-approval-pubkey.pem",
+    "T02-c0d-approval-handoff.md",
+    "install-c0d-approval-pubkey.py",
+    "c0d-refusal-demos.py",
     # workflow 權威副本與 keygen
     "github-actions/t02-sign-receipt.yml",
     "tools/t02-keygen.html",

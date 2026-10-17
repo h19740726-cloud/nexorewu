@@ -101,7 +101,7 @@ def make_receipt(priv_path: Path, workdir: Path, payload: dict, pub_pem: str) ->
     }
 
 
-def patched_script(dest_dir: Path, pubkey_pem: str) -> Path:
+def patched_script(dest_dir: Path, receipt_pubkey_pem: str, approval_pubkey_pem: str) -> Path:
     """複製受驗腳本，**把公鑰常數換成測試公鑰**（受驗本體其餘一行不動）。
 
     公鑰是寫死的常數，測試不可能在不改腳本的情況下換金鑰；因此測試改的是
@@ -113,21 +113,23 @@ def patched_script(dest_dir: Path, pubkey_pem: str) -> Path:
     ⇒ 正式公鑰安裝（C0b）後，本測試套件仍可全套運行。
     """
     src = SCRIPT.read_text(encoding="utf-8")
-    sentinel = 'RECEIPT_PUBKEY_PEM = ""'
-    if sentinel in src:
-        patched = src.replace(sentinel, "RECEIPT_PUBKEY_PEM = " + json.dumps(pubkey_pem), 1)
-    else:
-        lines = []
-        replaced = False
-        for line in src.splitlines(keepends=True):
-            if not replaced and line.startswith("RECEIPT_PUBKEY_PEM = "):
-                lines.append("RECEIPT_PUBKEY_PEM = " + json.dumps(pubkey_pem) + "\n")
-                replaced = True
-            else:
-                lines.append(line)
-        if not replaced:
-            raise AssertionError("受驗腳本找不到公鑰常數（結構已變動，測試需同步）")
-        patched = "".join(lines)
+    replacements = {
+        "RECEIPT_PUBKEY_PEM": receipt_pubkey_pem,
+        "APPROVAL_PUBKEY_PEM": approval_pubkey_pem,
+    }
+    lines = []
+    seen = set()
+    for line in src.splitlines(keepends=True):
+        for name, value in replacements.items():
+            if line.startswith(name + " = "):
+                lines.append(name + " = " + json.dumps(value) + "\n")
+                seen.add(name)
+                break
+        else:
+            lines.append(line)
+    if seen != set(replacements):
+        raise AssertionError("受驗腳本找不到雙重公鑰常數（結構已變動，測試需同步）")
+    patched = "".join(lines)
     out = dest_dir / "T02-audit-with-testkey.py"
     out.write_text(patched, encoding="utf-8")
     return out
@@ -269,7 +271,11 @@ class DisciplineAuditTest(unittest.TestCase):
         cls.pub_pem_path = kd / "test-pub.pem"
         make_keypair(cls.priv_pem_path, cls.pub_pem_path)
         cls.pub_pem = cls.pub_pem_path.read_text(encoding="utf-8")
-        cls.script = patched_script(kd, cls.pub_pem)
+        cls.approval_priv_pem_path = kd / "test-approval-priv.pem"
+        cls.approval_pub_pem_path = kd / "test-approval-pub.pem"
+        make_keypair(cls.approval_priv_pem_path, cls.approval_pub_pem_path)
+        cls.approval_pub_pem = cls.approval_pub_pem_path.read_text(encoding="utf-8")
+        cls.script = patched_script(kd, cls.pub_pem, cls.approval_pub_pem)
         # 🔴 第 13 輪：本輪起「受驗版本」＝被執行副本的 SHA256（見 script_version()）。
         global _ACTIVE_SCRIPT
         _ACTIVE_SCRIPT = cls.script
@@ -317,6 +323,33 @@ class DisciplineAuditTest(unittest.TestCase):
             pub_pem if pub_pem is not None else self.pub_pem,
         )
         target.write_text(json.dumps(receipt, ensure_ascii=False), encoding="utf-8")
+        return target
+
+    def write_approval(self, receipt_path, *, path=None, priv_path=None, pub_pem=None):
+        """由測試中的獨立驗收者簽發、且精確綁定 receipt 的清除核准。"""
+        raw = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
+        receipt_payload = json.loads(base64.b64decode(raw["payload_b64"]).decode("utf-8"))
+        payload = {
+            "task_id": receipt_payload["task_id"],
+            "version": receipt_payload["version"],
+            "pending_ids": receipt_payload["pending_ids"],
+            "result_sha256": receipt_payload["result_sha256"],
+            "receipt_sha256": hashlib.sha256(Path(receipt_path).read_bytes()).hexdigest(),
+            "receipt_nonce": receipt_payload["nonce"],
+        }
+        target = Path(path) if path else (self.root / "approval.json")
+        target.write_text(
+            json.dumps(
+                make_receipt(
+                    priv_path or self.approval_priv_pem_path,
+                    self.root,
+                    payload,
+                    pub_pem if pub_pem is not None else self.approval_pub_pem,
+                ),
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
         return target
 
     def isolated_env(self, env_extra=None):
@@ -420,6 +453,11 @@ class DisciplineAuditTest(unittest.TestCase):
 
     def run_cli(self, *args, env_extra=None, identity="test-card"):
         """跑稽核器的 CLI 子命令（--status／--clear）。一律給 stdin，避免子行程卡住。"""
+        args = list(args)
+        if args[:1] == ["--clear"] and "--approval" not in args and "--receipt" in args:
+            receipt = Path(args[args.index("--receipt") + 1])
+            if receipt.is_file():
+                args.extend(["--approval", str(self.write_approval(receipt))])
         extra = dict(env_extra or {})
         if identity:
             extra["T02_TASK_ID"] = identity
@@ -2616,9 +2654,11 @@ class DisciplineAuditTest(unittest.TestCase):
             self.receipt_payload("test-card", result_path=verdict),
             path=self.root / "receipt-a.json",
         )
+        approval_a = self.write_approval(receipt_a)
         proc_a = subprocess.run(
             ["/usr/bin/python3", str(self.script), "--clear", "test-card",
-             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_a)],
+             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_a),
+             "--approval", str(approval_a)],
             input="", text=True, capture_output=True,
             env=self.isolated_env(), cwd=str(hostile_cwd), check=False,
         )
@@ -2657,9 +2697,11 @@ class DisciplineAuditTest(unittest.TestCase):
             self.receipt_payload("test-card", result_path=verdict),
             path=self.root / "receipt-a.json",
         )
+        approval_a = self.write_approval(receipt_a)
         proc_a = subprocess.run(
             ["/usr/bin/python3", str(copied), "--clear", "test-card",
-             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_a)],
+             "--result", str(verdict), "--by", "codex", "--receipt", str(receipt_a),
+             "--approval", str(approval_a)],
             input="", text=True, capture_output=True,
             env=self.isolated_env(), check=False,
         )
@@ -2737,11 +2779,58 @@ class DisciplineAuditTest(unittest.TestCase):
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("尚未安裝核定公鑰", proc.stderr)
 
+    def test_c0d_workbuddy_cannot_self_clear_or_forge_independent_approval(self):
+        """C0d 核心反例：receipt、結果檔與 `--by WorkBuddy` 都不足以清除。
+
+        即使 WorkBuddy 自產另一把私鑰與看似完整的核准檔，也必須因指紋不符被拒；
+        只有內嵌的獨立驗收公鑰對應私鑰所簽，才可進入既有的一次性清除流程。
+        """
+        self.run_case([user("session-1", "u1"), tool("session-1", "Edit", "e1")], stop_hook_active=True)
+        before = self._pending_bytes()
+        verdict = self.root / "codex-final.md"
+        self.write_verdict(verdict, "test-card", script_version())
+        receipt = self.write_receipt(self.receipt_payload("test-card", result_path=verdict))
+
+        no_approval = self.run_cli_raw(
+            self.script, "--clear", "test-card", "--result", str(verdict),
+            "--receipt", str(receipt), "--by", "WorkBuddy",
+        )
+        self.assertNotEqual(no_approval.returncode, 0)
+        self.assertIn("獨立核准檔不存在", no_approval.stderr)
+        self.assertEqual(self._pending_bytes(), before)
+
+        attacker_priv, attacker_pub = self._make_b_key()
+        forged = self.write_approval(
+            receipt,
+            path=self.root / "workbuddy-forged-approval.json",
+            priv_path=attacker_priv,
+            pub_pem=Path(attacker_pub).read_text(encoding="utf-8"),
+        )
+        forged_attempt = self.run_cli_raw(
+            self.script, "--clear", "test-card", "--result", str(verdict),
+            "--receipt", str(receipt), "--approval", str(forged), "--by", "Codex",
+        )
+        self.assertNotEqual(forged_attempt.returncode, 0)
+        self.assertIn("公鑰指紋", forged_attempt.stderr)
+        self.assertEqual(self._pending_bytes(), before)
+
+        approval = self.write_approval(receipt, path=self.root / "independent-approval.json")
+        cleared = self.run_cli_raw(
+            self.script, "--clear", "test-card", "--result", str(verdict),
+            "--receipt", str(receipt), "--approval", str(approval), "--by", "WorkBuddy",
+        )
+        self.assertEqual(cleared.returncode, 0, cleared.stdout + cleared.stderr)
+        data = json.loads((self.root / "pending.json").read_text(encoding="utf-8"))
+        self.assertTrue(all(str(item.get("cleared_by")).startswith("independent-approval:")
+                            for item in data.values()))
+        self.assertNotIn("WorkBuddy", json.dumps(data, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 # <!-- 變更：Codex 桌面版 ｜ 2026-10-12 08:42 ｜ 新增 T02 隔離驗收測試 -->
+# <!-- 變更：Codex ｜ 2026-10-17 ｜ C0d：新增 WorkBuddy 自填身分與自簽核准均被拒的反例；雙信任根測試副本 -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 11:4x ｜ 第4輪新增 9 條回歸 -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 17:5x ｜ 第8輪：移除專案映射卡號；補同一 project 卡 A→B（同/跨 session）、缺號無條件拒絕、他卡 pending 不誤擋、卡號 ASCII 白名單、boundary 只收合法字串、PASS 語義一致、清 T02_CARD_FILE -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 22:3x ｜ 第9輪：identity 改由 env 通道（identity=）提供，測試不再自動補宣告；補 A2 不得回看歷史、A3 拒 fence／重複／多來源衝突／權威卡片清單、A4 宣告不 Unicode strip、A5 boundary raw 先驗、A6 空 boundary 以卡號留 pending、A7 同卡多筆 open 仍擋／不跨卡／不覆寫損壞 store -->

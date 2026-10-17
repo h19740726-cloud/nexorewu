@@ -6,15 +6,16 @@
 執行地點（本機 vs GitHub runner）與金鑰（測試 vs 正式 environment secret）。
 
 步驟（對應 workflow）：
-  S0  準備：造「測試公鑰版」稽核器（兩棵樹）、造 pending（真實 Stop 事件）、
-      生成結果檔與申請檔
+  S0  準備：造「測試公鑰版」稽核器（兩棵樹；**兩把測試金鑰**：receipt＋獨立核准）、
+      造 pending（真實 Stop 事件）、生成結果檔與申請檔
   S1a preflight（第一次；= workflow 的 preflight job）→ payload ＋ 導出 pin
   S1b preflight 重跑（= workflow 的 sign 內重跑；帶 pin）→ 與 S1a 位元組相同
   S2  簽名（= workflow 的有鑰步驟；純 openssl）→ sig.bin / pub.pem
   S3  assemble（= workflow 的組裝步驟）→ receipt.json
-  S4  反例（清除前）：錯卡、錯版本、錯簽名、竄改受驗檔 → 全部拒＋pending 不變
-  S5  正例：清除成功（rc=0、status=True）
-  S6  反例（清除後）：重放 → 拒
+  S3b 簽發獨立核准（C0d 雙簽第二信任根；綁定 receipt 六欄）
+  S4  反例（清除前）：錯卡、錯版本、錯簽名、竄改受驗檔、缺核准、偽造核准 → 全部拒＋pending 不變
+  S5  正例：雙簽（receipt＋獨立核准）→ 清除成功（rc=0、status=True、cleared_by 記核准指紋）
+  S6  反例（清除後）：還原 pending 後重放（同 receipt＋核准）→ 拒（nonce 已用）
   S7  反例：缺 key（空 T02_SIGNING_KEY 的簽名步驟）→ 拒
 """
 from __future__ import annotations
@@ -75,24 +76,32 @@ def make_transcript(root: pathlib.Path) -> pathlib.Path:
     return path
 
 
-def build_audit_with_test_pubkey(src: pathlib.Path, dst: pathlib.Path, pub_pem: str) -> str:
+def build_audit_with_test_pubkeys(src: pathlib.Path, dst: pathlib.Path,
+                                  receipt_pub_pem: str, approval_pub_pem: str) -> str:
+    """複製受驗稽核器，**兩個信任根都換成測試公鑰**（其餘逐位元不動）。
+
+    C0d（2026-10-17）：清除需雙簽 ⇒ 除 RECEIPT_PUBKEY_PEM 外，
+    APPROVAL_PUBKEY_PEM 亦須換成測試核准公鑰，方能彩排「合法核准」路徑。
+    每個常數都支援雙路相容：sentinel 在→原替換；不在（已裝正式公鑰）→整行替換。
+    """
     text = src.read_text(encoding="utf-8")
-    sentinel = 'RECEIPT_PUBKEY_PEM = ""'
-    if sentinel in text:
-        replaced = text.replace(sentinel, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem), 1)
-    else:
-        # 雙路相容（2026-10-16）：正式公鑰已安裝 → 整行替換成測試公鑰
-        _lines = []
-        _done = False
-        for _line in text.splitlines(keepends=True):
-            if not _done and _line.startswith("RECEIPT_PUBKEY_PEM = "):
-                _lines.append("RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem) + "\n")
-                _done = True
+    for name, pem in (("RECEIPT_PUBKEY_PEM", receipt_pub_pem),
+                      ("APPROVAL_PUBKEY_PEM", approval_pub_pem)):
+        sentinel = f'{name} = ""'
+        if sentinel in text:
+            text = text.replace(sentinel, f"{name} = " + json.dumps(pem), 1)
+            continue
+        lines = []
+        done = False
+        for line in text.splitlines(keepends=True):
+            if not done and line.startswith(f"{name} = "):
+                lines.append(f"{name} = " + json.dumps(pem) + "\n")
+                done = True
             else:
-                _lines.append(_line)
-        assert _done, "受驗稽核器找不到公鑰常數（結構已變動）"
-        replaced = "".join(_lines)
-    dst.write_text(replaced, encoding="utf-8")
+                lines.append(line)
+        assert done, f"受驗稽核器找不到公鑰常數（結構已變動）：{name}"
+        text = "".join(lines)
+    dst.write_text(text, encoding="utf-8")
     return sha256_of(dst)
 
 
@@ -108,7 +117,7 @@ def main() -> int:
         (env_dir / "tasks" / "T02DEMO-demo.md").write_text("# 彩排示範卡\n", encoding="utf-8")
 
         # ---------- S0 準備 ----------
-        # 測試金鑰對
+        # 測試金鑰對（receipt 信任根）
         r = run([OPENSSL, "ecparam", "-name", "prime256v1", "-genkey", "-noout",
                  "-out", str(keys / "priv.pem")])
         if r.returncode != 0:
@@ -117,9 +126,20 @@ def main() -> int:
         run([OPENSSL, "ec", "-in", str(keys / "priv.pem"), "-pubout", "-out", str(keys / "pub.pem")])
         pub_pem = (keys / "pub.pem").read_text(encoding="utf-8")
 
+        # 測試金鑰對（獨立核准信任根；C0d 雙簽第二把）
+        r = run([OPENSSL, "ecparam", "-name", "prime256v1", "-genkey", "-noout",
+                 "-out", str(keys / "appr-priv.pem")])
+        if r.returncode != 0:
+            print("openssl genkey（核准）失敗：", r.stderr)
+            return 1
+        run([OPENSSL, "ec", "-in", str(keys / "appr-priv.pem"), "-pubout",
+             "-out", str(keys / "appr-pub.pem")])
+        approval_pub_pem = (keys / "appr-pub.pem").read_text(encoding="utf-8")
+
         # 測試公鑰版稽核器（tag 樹與 trusted 樹各一份，逐位元相同）
-        version = build_audit_with_test_pubkey(BASE / "T02-discipline-audit.py",
-                                               tag_tree / "T02-discipline-audit.py", pub_pem)
+        version = build_audit_with_test_pubkeys(BASE / "T02-discipline-audit.py",
+                                                tag_tree / "T02-discipline-audit.py",
+                                                pub_pem, approval_pub_pem)
         shutil.copy2(tag_tree / "T02-discipline-audit.py", trusted_tree / "T02-discipline-audit.py")
         # 簽發工具與 workflow 檔（兩樹對應路徑）
         shutil.copy2(BASE / "t02-ci-payload.py", tag_tree / "t02-ci-payload.py")
@@ -229,6 +249,13 @@ def main() -> int:
         record("S3 assemble（組 receipt）", r.returncode == 0 and receipt_path.is_file(),
                f"rc={r.returncode}")
 
+        # ---------- S3b 簽發獨立核准（C0d 雙簽第二信任根） ----------
+        approval_path = env_dir / "approval.json"
+        r = run([PY, str(BASE / "sign-receipt.py"), "--key", str(keys / "appr-priv.pem"),
+                 "--approval-of", str(receipt_path), "--receipt-out", str(approval_path)])
+        record("S3b 簽發獨立核准（綁定 receipt 六欄）",
+               r.returncode == 0 and approval_path.is_file(), f"rc={r.returncode}")
+
         # ---------- S4 反例（清除前；每條都要：拒絕＋pending 位元組不變） ----------
         pending_before = sha256_of(env_dir / "pending.json")
 
@@ -246,12 +273,13 @@ def main() -> int:
             pending_before = after
             return rr
 
-        # a) 錯卡：receipt 綁 T02DEMO，目標換 T02OTHER
+        # a) 錯卡：receipt 綁 T02DEMO，目標換 T02OTHER（附真核准 → 應在卡號檢查被拒）
         try_clear("S4a 錯卡（receipt 卡號≠目標）被拒",
                   ["--clear", "T02OTHER", "--result", str(tag_tree / "T02-DEMO-verdict.md"),
-                   "--receipt", str(receipt_path), "--by", "rehearsal"])
+                   "--receipt", str(receipt_path), "--approval", str(approval_path),
+                   "--by", "rehearsal"])
 
-        # b) 錯版本：用本地簽發工具簽一份 version 錯誤的 receipt
+        # b) 錯版本：用本地簽發工具簽一份 version 錯誤的 receipt（附真核准 → 應在版本檢查被拒）
         wrong_path = env_dir / "receipt-wrong-version.json"
         run([PY, str(trusted_tree / "sign-receipt.py"), "--key", str(keys / "priv.pem"),
              "--task-id", "T02DEMO", "--version", "0" * 64,
@@ -260,7 +288,8 @@ def main() -> int:
              "--receipt-out", str(wrong_path)])
         try_clear("S4b 錯版本（version≠執行檔）被拒",
                   ["--clear", "T02DEMO", "--result", str(tag_tree / "T02-DEMO-verdict.md"),
-                   "--receipt", str(wrong_path), "--by", "rehearsal"])
+                   "--receipt", str(wrong_path), "--approval", str(approval_path),
+                   "--by", "rehearsal"])
 
         # c) 錯簽名：改一個 byte
         tampered = env_dir / "receipt-tampered.json"
@@ -285,21 +314,50 @@ def main() -> int:
                f"rc={r.returncode} err={(r.stderr.strip().splitlines() or [''])[1][:90]}")
         req_path.write_text(backup, encoding="utf-8")
 
-        # ---------- S5 正例：清除成功 ----------
-        try_clear("S5 正例（合法 receipt）清除成功",
+        # e) 缺核准（C0d 核心）：合法 receipt＋結果檔齊全，但沒有獨立核准 → 拒（pending 不變）
+        try_clear("S4e 缺核准（C0d：僅 receipt 不足以清除）被拒",
                   ["--clear", "T02DEMO", "--result", str(tag_tree / "T02-DEMO-verdict.md"),
-                   "--receipt", str(receipt_path), "--by", "rehearsal"],
+                   "--receipt", str(receipt_path), "--by", "rehearsal"])
+
+        # f) 偽造核准（C0d 核心）：以「非核准私鑰」自簽核准 → 指紋不符 → 拒
+        forged_path = env_dir / "approval-forged.json"
+        run([PY, str(BASE / "sign-receipt.py"), "--key", str(keys / "priv.pem"),
+             "--approval-of", str(receipt_path), "--receipt-out", str(forged_path)])
+        try_clear("S4f 偽造核准（自簽核准檔）被拒",
+                  ["--clear", "T02DEMO", "--result", str(tag_tree / "T02-DEMO-verdict.md"),
+                   "--receipt", str(receipt_path), "--approval", str(forged_path),
+                   "--by", "WorkBuddy"])
+
+        # ---------- S5 正例：雙簽清除成功 ----------
+        shutil.copy2(env_dir / "pending.json", env_dir / "pending.pres5.json")
+        try_clear("S5 正例（receipt＋獨立核准雙簽）清除成功",
+                  ["--clear", "T02DEMO", "--result", str(tag_tree / "T02-DEMO-verdict.md"),
+                   "--receipt", str(receipt_path), "--approval", str(approval_path),
+                   "--by", "rehearsal"],
                   expect_reject=False)
         rr = run([PY, str(trusted_tree / "T02-discipline-audit.py"), "--status", "T02DEMO"],
                  env=env_for(env_dir))
         status = json.loads(rr.stdout)
         record("S5b status（completion_allowed=True）", status.get("completion_allowed") is True,
                f"status={status.get('completion_allowed')}")
+        cleared_store = json.loads((env_dir / "pending.json").read_text(encoding="utf-8"))
+        by_ok = all(str(v.get("cleared_by") or "").startswith("independent-approval:")
+                    for v in cleared_store.values())
+        record("S5c cleared_by 記獨立核准指紋（--by 文字不入庫）",
+               by_ok and "rehearsal" not in json.dumps(cleared_store, ensure_ascii=False),
+               f"by_ok={by_ok}")
 
-        # ---------- S6 反例（清除後）：重放 ----------
-        try_clear("S6 重放（同 receipt 第二次）被拒",
-                  ["--clear", "T02DEMO", "--result", str(tag_tree / "T02-DEMO-verdict.md"),
-                   "--receipt", str(receipt_path), "--by", "rehearsal"])
+        # ---------- S6 反例（清除後）：還原 pending 後重放同一 receipt＋核准 → nonce 已用 ----------
+        shutil.copy2(env_dir / "pending.pres5.json", env_dir / "pending.json")
+        rr = run([PY, str(trusted_tree / "T02-discipline-audit.py"), "--clear", "T02DEMO",
+                  "--result", str(tag_tree / "T02-DEMO-verdict.md"),
+                  "--receipt", str(receipt_path), "--approval", str(approval_path),
+                  "--by", "rehearsal"],
+                 env=env_for(env_dir))
+        intact = sha256_of(env_dir / "pending.json") == sha256_of(env_dir / "pending.pres5.json")
+        record("S6 重放（同 receipt＋核准，還原後）被拒",
+               rr.returncode == 3 and "nonce" in rr.stderr and intact,
+               f"rc={rr.returncode} pending_intact={intact} err={rr.stderr.strip()[:70]}")
 
         # ---------- S7 缺 key（模擬 workflow 有鑰步驟的空 key 分支） ----------
         r = subprocess.run(

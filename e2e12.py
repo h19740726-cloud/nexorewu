@@ -7,8 +7,12 @@
   E1 建立 pending（跑 Stop hook）
   E2 攻擊 A：產出者自設 `T02_REVIEW_TOKEN_SHA256` → 清 pending 應被拒絕
   E3 攻擊 B：用「另一把私鑰」簽的 receipt → 拒絕
-  E4 正向  ：用內嵌公鑰對應的私鑰簽合法 receipt → 清除成功
-  E5 重放  ：同一份 receipt 第二次 → 拒絕
+  E6 缺核准（C0d 核心）：合法 receipt、無獨立核准 → 拒絕
+  E4 正向  ：receipt＋獨立核准**雙簽** → 清除成功
+  E5 重放  ：還原 pending 後，同一組 receipt＋核准再用 → 拒絕（nonce 已用）
+
+🔴 C0d（2026-10-17）：清除需雙信任根（receipt＋獨立核准）；本腳本的受驗副本
+   **兩個公鑰常數都換成測試金鑰**。
 """
 from __future__ import annotations
 
@@ -16,6 +20,7 @@ import hashlib
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -25,8 +30,6 @@ AUDIT = BASE / "T02-discipline-audit.py"
 GENKEY = BASE / "gen-receipt-key.py"
 SIGN = BASE / "sign-receipt.py"
 PY = "/usr/bin/python3"
-
-SENTINEL = 'RECEIPT_PUBKEY_PEM = ""'
 
 
 def run(cmd, *, env=None, stdin=None, cwd=None):
@@ -75,30 +78,39 @@ def main() -> int:
         (root / "tasks").mkdir()
         (root / "tasks" / "T02-e2e.md").write_text("# 測試卡\n", encoding="utf-8")
 
-        # E0：產生金鑰對，並做一份內嵌該公鑰的受驗腳本副本
+        # E0：產生金鑰對（receipt＋獨立核准），並做一份內嵌兩把測試公鑰的受驗腳本副本
         keys = root / "keys"
         gk = run([PY, str(GENKEY), str(keys)], cwd=str(BASE))
         if gk.returncode != 0:
             print("E0 產生金鑰失敗：", gk.stdout, gk.stderr)
             return 1
+        appr_keys = root / "approval-keys"
+        gk2 = run([PY, str(GENKEY), str(appr_keys)], cwd=str(BASE))
+        if gk2.returncode != 0:
+            print("E0 產生核准金鑰失敗：", gk2.stdout, gk2.stderr)
+            return 1
         pub_pem = (keys / "t02-receipt-pub.pem").read_text(encoding="utf-8")
+        approval_pub_pem = (appr_keys / "t02-receipt-pub.pem").read_text(encoding="utf-8")
         src = AUDIT.read_text(encoding="utf-8")
         audit_copy = root / "audit-e2e.py"
-        if SENTINEL in src:
-            patched = src.replace(SENTINEL, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem), 1)
-        else:
-            # 雙路相容（2026-10-16）：正式公鑰已安裝 → 整行替換成測試公鑰
-            _lines = []
-            _done = False
-            for _line in src.splitlines(keepends=True):
-                if not _done and _line.startswith("RECEIPT_PUBKEY_PEM = "):
-                    _lines.append("RECEIPT_PUBKEY_PEM = " + json.dumps(pub_pem) + "\n")
-                    _done = True
+        # C0d：兩個信任根常數都換成測試公鑰；每個常數雙路相容（sentinel 或已裝整行替換）
+        for name, pem in (("RECEIPT_PUBKEY_PEM", pub_pem),
+                          ("APPROVAL_PUBKEY_PEM", approval_pub_pem)):
+            sentinel = f'{name} = ""'
+            if sentinel in src:
+                src = src.replace(sentinel, f"{name} = " + json.dumps(pem), 1)
+                continue
+            lines = []
+            done = False
+            for line in src.splitlines(keepends=True):
+                if not done and line.startswith(f"{name} = "):
+                    lines.append(f"{name} = " + json.dumps(pem) + "\n")
+                    done = True
                 else:
-                    _lines.append(_line)
-            assert _done, "受驗腳本找不到公鑰常數（結構已變動）"
-            patched = "".join(_lines)
-        audit_copy.write_text(patched, encoding="utf-8")
+                    lines.append(line)
+            assert done, f"受驗腳本找不到公鑰常數（結構已變動）：{name}"
+            src = "".join(lines)
+        audit_copy.write_text(src, encoding="utf-8")
         version = hashlib.sha256(audit_copy.read_bytes()).hexdigest()
 
         # E1：建立 pending
@@ -148,30 +160,52 @@ def main() -> int:
         results.append(("E3 攻擊B（他鑰簽發）被拒", r3.returncode != 0 and s3 is False,
                         f"rc={r3.returncode} status={s3} err={r3.stderr.strip()}"))
 
-        # E4：正向（正確私鑰簽發）
+        # 造合法 receipt 與獨立核准（E6／E4／E5 共用）
         good = root / "receipt.json"
-        r4sign = run(
+        run(
             [PY, str(SIGN), "--key", str(keys / "t02-receipt-priv.pem"), "--task-id", "T02",
              "--version", version, "--result", str(verdict), "--receipt-out", str(good),
              "--pending-ids", ",".join(ids)],
             env=env_for(root),
         )
+        approval = root / "approval.json"
+        run(
+            [PY, str(SIGN), "--key", str(appr_keys / "t02-receipt-priv.pem"),
+             "--approval-of", str(good), "--receipt-out", str(approval)],
+            env=env_for(root),
+        )
+
+        # E6：缺核准（C0d 核心）——合法 receipt 但無獨立核准 → 拒
+        r6 = run(
+            [PY, str(audit_copy), "--clear", "T02", "--result", str(verdict),
+             "--version", version, "--by", "WorkBuddy", "--receipt", str(good)],
+            env=env_for(root),
+        )
+        s6 = status_of(root, audit_copy)
+        results.append(("E6 缺核准（僅 receipt）被拒", r6.returncode != 0 and s6 is False,
+                        f"rc={r6.returncode} status={s6} err={r6.stderr.strip()}"))
+
+        # E4：正向（receipt＋獨立核准雙簽）
+        shutil.copy2(root / "pending.json", root / "pending.pre-e4.json")
         r4 = run(
             [PY, str(audit_copy), "--clear", "T02", "--result", str(verdict),
-             "--version", version, "--by", "codex", "--receipt", str(good)],
+             "--version", version, "--by", "codex", "--receipt", str(good),
+             "--approval", str(approval)],
             env=env_for(root),
         )
         s4 = status_of(root, audit_copy)
-        results.append(("E4 正向（合法 receipt）清除成功", r4.returncode == 0 and s4 is True,
+        results.append(("E4 正向（receipt＋核准雙簽）清除成功", r4.returncode == 0 and s4 is True,
                         f"rc={r4.returncode} status={s4} out={r4.stdout.strip()} err={r4.stderr.strip()}"))
 
-        # E5：重放（同一份 receipt 再用）
+        # E5：重放（還原 pending 後，同一組 receipt＋核准再用）→ nonce 已用拒
+        shutil.copy2(root / "pending.pre-e4.json", root / "pending.json")
         r5 = run(
             [PY, str(audit_copy), "--clear", "T02", "--result", str(verdict),
-             "--version", version, "--by", "codex", "--receipt", str(good)],
+             "--version", version, "--by", "codex", "--receipt", str(good),
+             "--approval", str(approval)],
             env=env_for(root),
         )
-        results.append(("E5 重放同一 receipt 被拒", r5.returncode != 0,
+        results.append(("E5 重放同一 receipt＋核准被拒", r5.returncode != 0,
                         f"rc={r5.returncode} err={r5.stderr.strip()}"))
 
     print("=== T02 第 12 輪 e2e ===")

@@ -9,6 +9,10 @@
   A3 先合法清除，再**改指防重放狀態路徑**（T02_NONCE_PATH）重放 → 應拒絕
   A4 同一 boundary 用於**另一張卡** → 兩張卡的 pending 必須並存（不得覆寫）
 
+🔴 C0d（2026-10-17）：清除需雙信任根（receipt＋獨立核准）。本腳本的受驗副本
+   **兩個公鑰常數都換成測試金鑰**；A1／A2／A3 的清除指令附測試核准（核對被拒原因
+   仍落在原本的檢查點上）。
+
 用法：/usr/bin/python3 repro-round2.py
 """
 from __future__ import annotations
@@ -107,26 +111,36 @@ def main() -> int:
         if gk.returncode != 0:
             print("產生金鑰失敗：", gk.stdout, gk.stderr)
             return 1
+        appr_keys = root / "approval-keys"
+        gk2 = run([PY, str(GENKEY), str(appr_keys)], cwd=str(BASE))
+        if gk2.returncode != 0:
+            print("產生核准金鑰失敗：", gk2.stdout, gk2.stderr)
+            return 1
         pub = (keys / "t02-receipt-pub.pem").read_text(encoding="utf-8")
+        approval_pub = (appr_keys / "t02-receipt-pub.pem").read_text(encoding="utf-8")
         priv = keys / "t02-receipt-priv.pem"
+        appr_priv = appr_keys / "t02-receipt-priv.pem"
 
         src = AUDIT.read_text(encoding="utf-8")
         audit = root / "audit-repro.py"
-        if SENTINEL in src:
-            patched = src.replace(SENTINEL, "RECEIPT_PUBKEY_PEM = " + json.dumps(pub), 1)
-        else:
-            # 雙路相容（2026-10-16）：正式公鑰已安裝 → 整行替換成測試公鑰
-            _lines = []
-            _done = False
-            for _line in src.splitlines(keepends=True):
-                if not _done and _line.startswith("RECEIPT_PUBKEY_PEM = "):
-                    _lines.append("RECEIPT_PUBKEY_PEM = " + json.dumps(pub) + "\n")
-                    _done = True
+        # C0d：兩個信任根常數都換成測試公鑰；每個常數雙路相容（sentinel 或已裝整行替換）
+        for name, pem in (("RECEIPT_PUBKEY_PEM", pub),
+                          ("APPROVAL_PUBKEY_PEM", approval_pub)):
+            sentinel = f'{name} = ""'
+            if sentinel in src:
+                src = src.replace(sentinel, f"{name} = " + json.dumps(pem), 1)
+                continue
+            lines = []
+            done = False
+            for line in src.splitlines(keepends=True):
+                if not done and line.startswith(f"{name} = "):
+                    lines.append(f"{name} = " + json.dumps(pem) + "\n")
+                    done = True
                 else:
-                    _lines.append(_line)
-            assert _done, "受驗腳本找不到公鑰常數（結構已變動）"
-            patched = "".join(_lines)
-        audit.write_text(patched, encoding="utf-8")
+                    lines.append(line)
+            assert done, f"受驗腳本找不到公鑰常數（結構已變動）：{name}"
+            src = "".join(lines)
+        audit.write_text(src, encoding="utf-8")
         version = hashlib.sha256(audit.read_bytes()).hexdigest()
 
         # ---- A1：receipt 版本與執行檔不符，省略 --version ----
@@ -134,8 +148,12 @@ def main() -> int:
         bad_verdict = write_verdict(root, "T02", "unrelated", "a1-verdict.md")
         bad_receipt = root / "a1-receipt.json"
         sign(priv, "T02", "not-the-running-script", bad_verdict, bad_receipt, root)
+        a1_approval = root / "a1-approval.json"
+        run([PY, str(SIGN), "--key", str(appr_priv), "--approval-of", str(bad_receipt),
+             "--receipt-out", str(a1_approval)], env=env_for(root))
         a1 = run([PY, str(audit), "--clear", "T02", "--result", str(bad_verdict),
-                  "--by", "WorkBuddy", "--receipt", str(bad_receipt)],
+                  "--by", "WorkBuddy", "--receipt", str(bad_receipt),
+                  "--approval", str(a1_approval)],
                  env=env_for(root))
         results.append(("A1 版本不符（省略 --version）被拒", a1.returncode != 0,
                         f"rc={a1.returncode}"))
@@ -148,14 +166,19 @@ def main() -> int:
         good_verdict = write_verdict(root, "T02", version, "a2-verdict.md")
         good_receipt = root / "a2-receipt.json"
         sign(priv, "T02", version, good_verdict, good_receipt, root)
+        a2_approval = root / "a2-approval.json"
+        run([PY, str(SIGN), "--key", str(appr_priv), "--approval-of", str(good_receipt),
+             "--receipt-out", str(a2_approval)], env=env_for(root))
         ok = run([PY, str(audit), "--clear", "T02", "--result", str(good_verdict),
-                  "--version", version, "--by", "codex", "--receipt", str(good_receipt)],
+                  "--version", version, "--by", "codex", "--receipt", str(good_receipt),
+                  "--approval", str(a2_approval)],
                  env=env_for(root))
         store = root / NONCE_DIR
         if store.exists():
             shutil.rmtree(store)
         a2 = run([PY, str(audit), "--clear", "T02", "--result", str(good_verdict),
-                  "--version", version, "--by", "codex", "--receipt", str(good_receipt)],
+                  "--version", version, "--by", "codex", "--receipt", str(good_receipt),
+                  "--approval", str(a2_approval)],
                  env=env_for(root))
         results.append(("A2 防重放狀態損毀後重放被拒",
                         ok.returncode == 0 and a2.returncode != 0,
@@ -171,11 +194,16 @@ def main() -> int:
         v3 = write_verdict(root3, "T02", version, "a3-verdict.md")
         r3 = root3 / "a3-receipt.json"
         sign(priv, "T02", version, v3, r3, root3)
+        a3_approval = root3 / "a3-approval.json"
+        run([PY, str(SIGN), "--key", str(appr_priv), "--approval-of", str(r3),
+             "--receipt-out", str(a3_approval)], env=env_for(root3))
         ok3 = run([PY, str(audit), "--clear", "T02", "--result", str(v3),
-                   "--version", version, "--by", "codex", "--receipt", str(r3)],
+                   "--version", version, "--by", "codex", "--receipt", str(r3),
+                   "--approval", str(a3_approval)],
                   env=env_for(root3))
         a3 = run([PY, str(audit), "--clear", "T02", "--result", str(v3),
-                  "--version", version, "--by", "codex", "--receipt", str(r3)],
+                  "--version", version, "--by", "codex", "--receipt", str(r3),
+                  "--approval", str(a3_approval)],
                  env=env_for(root3, {"T02_NONCE_PATH": str(root3 / "redirected.json")}))
         results.append(("A3 改指防重放路徑後重放被拒",
                         ok3.returncode == 0 and a3.returncode != 0,

@@ -177,6 +177,10 @@ TASKS_DIR = Path(
 #      由「獨立驗收」核對受驗版本雜湊把關（第 11 輪 §1 版本硬門檻）。
 RECEIPT_PUBKEY_PEM = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEBkSCHAzg2JOQeZjtJtqipXNOd3mG\nNqP9JcM7Lb8bBX5Y8tEEbDQXR2LOEv9bX3OF/Q/XwMlW4QfNxkaKNSXVeA==\n-----END PUBLIC KEY-----\n"
 
+# 清除不是產出者的操作權。除 receipt 外，還必須有獨立驗收者對同一份
+# receipt／結果／pending 集合簽發的核准。正式公鑰未安裝時一律拒絕清除。
+APPROVAL_PUBKEY_PEM = "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEr3Pmb0FMxE5YHU50FIlFg3kkoFOt\ns2fNFh1jD0zoT01gYpRNbVnRdeTMfKm4hxEcDbABSwA/ch+K0ldl3Q8uUA==\n-----END PUBLIC KEY-----\n"
+
 # 🔴 第 13 輪（對應第 2 輪 A 組 §5 第 1 條）：受驗執行檔自身的 SHA256＝**版本綁定的權威值**。
 #    receipt 的 `version`、驗收結果檔宣告的版本，都必須等於本值；且**不因省略 --version 而略過**
 #    （第 2 輪 A1 反例：省略 --version 就不比對 receipt 版本 → rc=0，舊 receipt 與執行檔不符仍放行）。
@@ -262,6 +266,41 @@ def openssl_verify(payload_bytes: bytes, signature: bytes, pubkey_pem: str) -> b
         return proc.returncode == 0
 
 
+def verify_signed_document(
+    path_text: str, pubkey_pem: str, label: str, uninstalled_reason: str
+) -> tuple[dict | None, str]:
+    """驗證一份由內嵌公鑰簽發的 JSON 文件。"""
+    if not pubkey_pem.strip():
+        return None, uninstalled_reason
+    path = Path(path_text) if path_text else None
+    if path is None or not path.is_file():
+        return None, f"{label}檔不存在：{path_text}"
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, f"{label}無法解析：{exc}"
+    if not isinstance(raw, dict):
+        return None, f"{label}不是 JSON 物件"
+    if raw.get("schema") != 1:
+        return None, f"{label} schema 不支援：{raw.get('schema')!r}"
+    if str(raw.get("key_fingerprint") or "") != pubkey_fingerprint(pubkey_pem):
+        return None, f"{label}的公鑰指紋與本檔內嵌公鑰不符"
+    try:
+        payload_bytes = base64.b64decode(str(raw.get("payload_b64") or ""), validate=True)
+        signature = base64.b64decode(str(raw.get("signature_b64") or ""), validate=True)
+    except (ValueError, TypeError) as exc:
+        return None, f"{label}的 base64 欄位損壞：{exc}"
+    if not openssl_verify(payload_bytes, signature, pubkey_pem):
+        return None, f"{label}簽章驗證失敗（非內嵌公鑰之對應私鑰所簽）"
+    try:
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, f"{label} payload 無法解析：{exc}"
+    if not isinstance(payload, dict):
+        return None, f"{label} payload 不是 JSON 物件"
+    return payload, ""
+
+
 def verify_receipt(receipt_path: str) -> tuple[dict | None, str]:
     """讀并驗收 receipt，回 (payload, 問題說明)。驗不過回 (None, 原因)。
 
@@ -275,37 +314,22 @@ def verify_receipt(receipt_path: str) -> tuple[dict | None, str]:
 
     驗簽**只認內嵌公鑰**（`RECEIPT_PUBKEY_PEM`）：不讀環境變數、不讀其他檔案、不接受 CLI 指定。
     """
-    if not RECEIPT_PUBKEY_PEM.strip():
-        return None, "尚未安裝核定公鑰（RECEIPT_PUBKEY_PEM 為空），保守拒絕所有清除"
-    path = Path(receipt_path) if receipt_path else None
-    if path is None or not path.is_file():
-        return None, f"receipt 檔不存在：{receipt_path}"
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return None, f"receipt 無法解析：{exc}"
-    if not isinstance(raw, dict):
-        return None, "receipt 不是 JSON 物件"
-    if raw.get("schema") != 1:
-        return None, f"receipt schema 不支援：{raw.get('schema')!r}"
-    fp = str(raw.get("key_fingerprint") or "")
-    expected_fp = pubkey_fingerprint(RECEIPT_PUBKEY_PEM)
-    if fp != expected_fp:
-        return None, "receipt 的公鑰指紋與本檔內嵌公鑰不符"
-    try:
-        payload_bytes = base64.b64decode(str(raw.get("payload_b64") or ""), validate=True)
-        signature = base64.b64decode(str(raw.get("signature_b64") or ""), validate=True)
-    except (ValueError, TypeError) as exc:
-        return None, f"receipt 的 base64 欄位損壞：{exc}"
-    if not openssl_verify(payload_bytes, signature, RECEIPT_PUBKEY_PEM):
-        return None, "receipt 簽章驗證失敗（非內嵌公鑰之對應私鑰所簽）"
-    try:
-        payload = json.loads(payload_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return None, f"receipt payload 無法解析：{exc}"
-    if not isinstance(payload, dict):
-        return None, "receipt payload 不是 JSON 物件"
-    return payload, ""
+    return verify_signed_document(
+        receipt_path,
+        RECEIPT_PUBKEY_PEM,
+        "receipt",
+        "尚未安裝核定公鑰（RECEIPT_PUBKEY_PEM 為空），保守拒絕所有清除",
+    )
+
+
+def verify_approval(approval_path: str) -> tuple[dict | None, str]:
+    """核准必須由第二個、與 receipt 不同的信任根簽發。"""
+    return verify_signed_document(
+        approval_path,
+        APPROVAL_PUBKEY_PEM,
+        "獨立核准",
+        "尚未安裝獨立核准公鑰（APPROVAL_PUBKEY_PEM 為空），保守拒絕所有清除",
+    )
 
 
 def nonce_store_dir() -> Path:
@@ -747,7 +771,9 @@ def _refuse_clear(key: str, result_path: str, reviewer: str, reason: str) -> Non
     )
 
 
-def clear_pending(key: str, result_path: str, version: str, reviewer: str, receipt_path: str) -> int:
+def clear_pending(
+    key: str, result_path: str, version: str, reviewer: str, receipt_path: str, approval_path: str
+) -> int:
     """清除 pending。空洞署名不算數，必須附「獨立驗收結果」與**有效簽章的 receipt**。
 
     🔴 第 12 輪整改（第 11 輪退件 §5 第 2、3 條）：
@@ -760,13 +786,19 @@ def clear_pending(key: str, result_path: str, version: str, reviewer: str, recei
     """
     if not key:
         print(
-            "用法：--clear <卡號> --result <驗收結果檔> --receipt <receipt.json> "
-            "[--version <S256>] [--by <驗收者>]",
+            "用法：--clear <卡號> --result <Codex驗收結果檔> --receipt <receipt.json> "
+            "--approval <獨立核准.json> [--version <SHA256>]",
             file=sys.stderr,
         )
         return 2
 
     payload, problem = verify_receipt(receipt_path)
+    if problem:
+        _refuse_clear(key, result_path, reviewer, problem)
+        print(f"clear refused: {problem}", file=sys.stderr)
+        return 3
+
+    approval, problem = verify_approval(approval_path)
     if problem:
         _refuse_clear(key, result_path, reviewer, problem)
         print(f"clear refused: {problem}", file=sys.stderr)
@@ -843,10 +875,32 @@ def clear_pending(key: str, result_path: str, version: str, reviewer: str, recei
             elif str(payload.get("result_sha256") or "") != digest:
                 reason = "receipt 綁定的驗收結果雜湊與實際檔案不符"
 
+    if not reason:
+        try:
+            receipt_sha = hashlib.sha256(Path(receipt_path).read_bytes()).hexdigest()
+        except OSError as exc:
+            reason = f"receipt 檔無法讀取：{exc}"
+        expected_approval = {
+            "task_id": key,
+            "version": artifact_sha,
+            "pending_ids": target_ids,
+            "result_sha256": digest,
+            "receipt_sha256": receipt_sha if not reason else "",
+            "receipt_nonce": nonce,
+        }
+        if not reason:
+            for field, expected in expected_approval.items():
+                if approval.get(field) != expected:
+                    reason = f"獨立核准綁定的 {field} 與本次清除不符"
+                    break
+
     if reason:
         _refuse_clear(key, result_path, reviewer, reason)
         print(f"clear refused: {reason}", file=sys.stderr)
         return 3
+
+    # `--by` 只是未驗證的呼叫者文字，永遠不是授權，也不得寫入清除身分。
+    cleared_by = "independent-approval:" + pubkey_fingerprint(APPROVAL_PUBKEY_PEM)
 
     # 一次性：先原子消費 nonce 再清 pending（避免「清成功但 nonce 未記」而可重放）。
     # 🔴 第 13 輪（§5 第 2 條）：改由 `consume_nonce()` 以 `O_CREAT|O_EXCL` 原子消費；
@@ -872,7 +926,7 @@ def clear_pending(key: str, result_path: str, version: str, reviewer: str, recei
                 "user_boundary_id": target,
                 "task_id": key,
                 "pending_id": pending_id,
-                "cleared_by": reviewer,
+                "cleared_by": cleared_by,
                 "result_path": result_path,
                 "result_sha256": digest,
                 "version": str(payload.get("version") or ""),
@@ -890,7 +944,7 @@ def clear_pending(key: str, result_path: str, version: str, reviewer: str, recei
     for target in targets:
         data[target]["completion_allowed"] = True
         data[target]["task_status"] = "已完成（獨立驗收核定）"
-        data[target]["cleared_by"] = reviewer
+        data[target]["cleared_by"] = cleared_by
         data[target]["cleared_at"] = now_iso()
         data[target]["cleared_by_result"] = result_path
         data[target]["cleared_result_sha256"] = digest
@@ -909,7 +963,7 @@ def clear_pending(key: str, result_path: str, version: str, reviewer: str, recei
         )
         print("clear refused: pending 存放區寫入失敗，未清除", file=sys.stderr)
         return 3
-    print(f"cleared {', '.join(target for target, _ in cleared)} by {reviewer}")
+    print(f"cleared {', '.join(target for target, _ in cleared)} by {cleared_by}")
     return 0
 
 
@@ -1398,12 +1452,12 @@ def allow_error(event: dict, reason: str) -> int:
 
 
 def parse_cli(argv: list[str]) -> tuple[list[str], dict]:
-    options = {"result": "", "version": "", "by": "", "receipt": ""}
+    options = {"result": "", "version": "", "by": "", "receipt": "", "approval": ""}
     positionals = []
     index = 0
     while index < len(argv):
         token = argv[index]
-        if token in ("--result", "--version", "--by", "--receipt"):
+        if token in ("--result", "--version", "--by", "--receipt", "--approval"):
             options[token[2:]] = argv[index + 1] if len(argv) > index + 1 else ""
             index += 2
             continue
@@ -1429,7 +1483,9 @@ def main() -> int:
     if argv[:1] == ["--clear"]:
         positionals, options = parse_cli(argv[1:])
         key = positionals[0] if positionals else ""
-        return clear_pending(key, options["result"], options["version"], options["by"], options["receipt"])
+        return clear_pending(
+            key, options["result"], options["version"], options["by"], options["receipt"], options["approval"]
+        )
 
     try:
         event = json.load(sys.stdin)
@@ -1607,6 +1663,7 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 # <!-- 變更：Codex 桌面版 ｜ 2026-10-12 08:42 ｜ 新增 T02 Stop 紀律驗收器 -->
+# <!-- 變更：Codex ｜ 2026-10-17 ｜ C0d：清除改須 receipt 與獨立核准雙簽；--by 不再構成授權；未安裝第二公鑰時 fail-closed -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 11:1x ｜ 放行即標未完成＋修重複載入假陽性 -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 11:3x ｜ 第4輪整改 -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 17:5x ｜ 第8輪整改：移除 project/cwd/session 冒充卡號；卡號改為明確宣告且缺號無條件保守拒絕；卡號改 ASCII 白名單；message_id 只收合法字串；總判定語義單一化；記錄 event_keys -->
