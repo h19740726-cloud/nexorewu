@@ -746,6 +746,7 @@ class DisciplineAuditTest(unittest.TestCase):
             "--by", "codex", "--receipt", str(receipt),
         )
         self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("receipt 綁定的版本", refused.stderr, refused.stderr)  # C0d：鎖首層拒絕語
         still = self.run_cli("--status", "test-card")
         self.assertEqual(json.loads(still.stdout)["completion_allowed"], False)
 
@@ -2147,6 +2148,9 @@ class DisciplineAuditTest(unittest.TestCase):
             "--by", "codex", "--receipt", str(receipt),
         )
         self.assertNotEqual(refused.returncode, 0)
+        # 🔴 C0d（2026-10-17）：鎖「首層」拒絕語。雙層防禦下（次層＝獨立核准六欄綁定），
+        #    首層守門被停用時若只斷言 rc≠0，會被次層代償攔截而看不出異狀 ⇒ 必須鎖首層訊息。
+        self.assertIn("receipt 綁定的卡號", refused.stderr, refused.stderr)
         self.assertEqual(self._pending_bytes(), before, "卡號不符時 pending 必須逐位元不變")
 
     def test_r17_b3_pending_ids_mismatch_leaves_pending_intact(self):
@@ -2163,6 +2167,7 @@ class DisciplineAuditTest(unittest.TestCase):
             "--by", "codex", "--receipt", str(receipt),
         )
         self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("receipt 綁定的 pending IDs", refused.stderr, refused.stderr)  # C0d：鎖首層拒絕語
         self.assertEqual(self._pending_bytes(), before, "pending IDs 不符時 pending 必須逐位元不變")
 
     def test_r17_b4_result_sha_mismatch_leaves_pending_intact(self):
@@ -2179,6 +2184,7 @@ class DisciplineAuditTest(unittest.TestCase):
             "--by", "codex", "--receipt", str(receipt),
         )
         self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("receipt 綁定的驗收結果雜湊", refused.stderr, refused.stderr)  # C0d：鎖首層拒絕語
         self.assertEqual(self._pending_bytes(), before, "結果檔雜湊不符時 pending 必須逐位元不變")
 
     def test_r17_b5_locked_version_mismatch_leaves_pending_intact(self):
@@ -2195,6 +2201,7 @@ class DisciplineAuditTest(unittest.TestCase):
             "--by", "codex", "--receipt", str(receipt),
         )
         self.assertNotEqual(refused.returncode, 0)
+        self.assertIn("receipt 綁定的版本", refused.stderr, refused.stderr)  # C0d：鎖首層拒絕語
         self.assertEqual(self._pending_bytes(), before, "鎖版 SHA 不符時 pending 必須逐位元不變")
 
     def test_r17_b6_nonce_replay_leaves_pending_intact(self):
@@ -2839,6 +2846,7 @@ if __name__ == "__main__":
 # <!-- 變更：Codex ｜ 2026-10-17 ｜ C0d：新增 WorkBuddy 自填身分與自簽核准均被拒的反例；雙信任根測試副本 -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 11:4x ｜ 第4輪新增 9 條回歸 -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-17 ｜ C0d 補：測試夾具競態修正（sign_bytes／write_approval 檔名唯一化；語義不變；紅燈實證＝123 測一輪 r13 併發假紅） -->
+# <!-- 變更：WorkBuddy ｜ 2026-10-17 ｜ C0d 補②：五條測試加鎖「首層拒絕語」（r17_b2／b3／b4／b5、test_clear_rejects_version_mismatch；雙層防禦下之突變可偵測性；auditor 零改動） -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 17:5x ｜ 第8輪：移除專案映射卡號；補同一 project 卡 A→B（同/跨 session）、缺號無條件拒絕、他卡 pending 不誤擋、卡號 ASCII 白名單、boundary 只收合法字串、PASS 語義一致、清 T02_CARD_FILE -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 22:3x ｜ 第9輪：identity 改由 env 通道（identity=）提供，測試不再自動補宣告；補 A2 不得回看歷史、A3 拒 fence／重複／多來源衝突／權威卡片清單、A4 宣告不 Unicode strip、A5 boundary raw 先驗、A6 空 boundary 以卡號留 pending、A7 同卡多筆 open 仍擋／不跨卡／不覆寫損壞 store -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-13 00:1x ｜ 第10輪：`card=` 參數無效化（卡號不來自 user content）；新增 §6-1/2 文字不能造身分（含縮排與未閉合 fence）、§6-3 pending_id 逐筆追蹤 open/clear、§6-4 clear 核對 entry task_id 與驗收結果 task_id 綁定、§6-5 不可寫 store 不冒 traceback 且留 audit；作廢第 9 輪宣告家族測試（A2／A3a／A3b／A4） -->

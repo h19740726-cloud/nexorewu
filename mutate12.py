@@ -51,6 +51,11 @@
   find 字串同步至**現行碼形**（M1／M2／M7 改咬通用函式內的三道守門；
   M16／M17 改在 `verify_receipt()` 的呼叫前注入覆寫）；**缺陷語義與預期紅燈不變**。
   未同步時五組均為「<字串未命中>」（2026-10-17 實測五組全數命中斷點）。
+🔴 C0d 之二（2026-10-17，全量首跑 14/18 之複驗）：M4／M5／M6／M11 不精準之因
+  ＝C0d **次層「獨立核准六欄綁定」代償攔截**（首層守門被停用後仍被拒 ⇒ 行為斷言照過）。
+  處置＝**測試端**五條（r17_b2／b3／b4／b5、test_clear_rejects_version_mismatch）
+  加鎖「首層拒絕語」（**auditor 零改動**；語義＝斷言哪一層拒絕，可偵測性回復）；
+  重跑四組回復精準（證據＝`T02-c0d-evidence/battery/mutate-M4M5M6M11-recheck.out`）。
 """
 from __future__ import annotations
 

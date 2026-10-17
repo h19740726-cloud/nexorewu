@@ -4,12 +4,12 @@
     "sha256": "ae79a6a25fff4b26aecbf7f0acc42f5d5c24706c3eeb460b610d19bf157c7671"
   },
   "test_T02_discipline_audit.py": {
-    "bytes": 148601,
-    "sha256": "8d1fd7574282abfac6d4366a718cf1a26c1d9ee37e1211f167b5eb3a37e33ce1"
+    "bytes": 149615,
+    "sha256": "00ea0a5584eee061ca02bf76da8fa3a08fc3dbd362c66d19390f9a0bec262bc3"
   },
   "mutate12.py": {
-    "bytes": 20711,
-    "sha256": "72e6d5953ec840db65e35dbf49358e94784df341934f5d4ad2a5482afb5c6382"
+    "bytes": 21248,
+    "sha256": "245b6303ed1044b19cabe68693db2bec764b0420c96c9e599f9589061b4349fb"
   },
   "test-sign-inputs.py": {
     "bytes": 18427,
