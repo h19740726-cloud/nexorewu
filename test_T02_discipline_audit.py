@@ -79,8 +79,14 @@ def make_keypair(priv_path: Path, pub_path: Path) -> None:
 
 
 def sign_bytes(priv_path: Path, workdir: Path, data: bytes) -> bytes:
-    data_file = workdir / "payload.bin"
-    sig_file = workdir / "sig.bin"
+    # 🔴 C0d 補（WorkBuddy，2026-10-17）：檔名唯一化。
+    #    病根：r13 併發測試以兩個執行緒同時呼叫 write_approval ⇒ 共用固定檔名
+    #    （payload.bin／sig.bin）互相截斷覆寫 ⇒ ECDSA 簽章撕裂 ⇒ 偶發假紅
+    #    （實證：123 測 77s 一輪，r13 併發測試兩跡皆「核准簽章驗證失敗」）。
+    #    語義不變：僅檔名唯一，簽／驗的位元組規則完全不動。
+    tag = uuid.uuid4().hex
+    data_file = workdir / f"payload-{tag}.bin"
+    sig_file = workdir / f"sig-{tag}.bin"
     data_file.write_bytes(data)
     subprocess.run(
         [OPENSSL, "dgst", "-sha256", "-sign", str(priv_path), "-out", str(sig_file), str(data_file)],
@@ -337,7 +343,7 @@ class DisciplineAuditTest(unittest.TestCase):
             "receipt_sha256": hashlib.sha256(Path(receipt_path).read_bytes()).hexdigest(),
             "receipt_nonce": receipt_payload["nonce"],
         }
-        target = Path(path) if path else (self.root / "approval.json")
+        target = Path(path) if path else (self.root / f"approval-{uuid.uuid4().hex}.json")
         target.write_text(
             json.dumps(
                 make_receipt(
@@ -2832,6 +2838,7 @@ if __name__ == "__main__":
 # <!-- 變更：Codex 桌面版 ｜ 2026-10-12 08:42 ｜ 新增 T02 隔離驗收測試 -->
 # <!-- 變更：Codex ｜ 2026-10-17 ｜ C0d：新增 WorkBuddy 自填身分與自簽核准均被拒的反例；雙信任根測試副本 -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 11:4x ｜ 第4輪新增 9 條回歸 -->
+# <!-- 變更：WorkBuddy ｜ 2026-10-17 ｜ C0d 補：測試夾具競態修正（sign_bytes／write_approval 檔名唯一化；語義不變；紅燈實證＝123 測一輪 r13 併發假紅） -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 17:5x ｜ 第8輪：移除專案映射卡號；補同一 project 卡 A→B（同/跨 session）、缺號無條件拒絕、他卡 pending 不誤擋、卡號 ASCII 白名單、boundary 只收合法字串、PASS 語義一致、清 T02_CARD_FILE -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-12 22:3x ｜ 第9輪：identity 改由 env 通道（identity=）提供，測試不再自動補宣告；補 A2 不得回看歷史、A3 拒 fence／重複／多來源衝突／權威卡片清單、A4 宣告不 Unicode strip、A5 boundary raw 先驗、A6 空 boundary 以卡號留 pending、A7 同卡多筆 open 仍擋／不跨卡／不覆寫損壞 store -->
 # <!-- 變更：WorkBuddy ｜ 2026-10-13 00:1x ｜ 第10輪：`card=` 參數無效化（卡號不來自 user content）；新增 §6-1/2 文字不能造身分（含縮排與未閉合 fence）、§6-3 pending_id 逐筆追蹤 open/clear、§6-4 clear 核對 entry task_id 與驗收結果 task_id 綁定、§6-5 不可寫 store 不冒 traceback 且留 audit；作廢第 9 輪宣告家族測試（A2／A3a／A3b／A4） -->
