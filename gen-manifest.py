@@ -39,6 +39,10 @@ FILES = [
     "T02-c0d-approval-handoff.md",
     "install-c0d-approval-pubkey.py",
     "c0d-refusal-demos.py",
+    # C0d 結果綁定與凍結態驗證（Codex 2026-10-24 退回要求第 1 條：必須進凍結 commit）
+    "T02-c0d-codex-result-TEMPLATE.md",
+    "bind-c0d-result.py",
+    "run-c0d-battery.sh",
     # workflow 權威副本與 keygen
     "github-actions/t02-sign-receipt.yml",
     "tools/t02-keygen.html",
@@ -49,6 +53,8 @@ FILES = [
 OPTIONAL_FILES = [
     "T02-sign-request.json",
     "T02-sign-verdict.md",
+    # Codex 交付後才存在；存在即收錄（receipt 必須綁它）
+    "T02-c0d-codex-result.md",
 ]
 
 

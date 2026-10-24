@@ -71,6 +71,18 @@
     "bytes": 9315,
     "sha256": "065e1afeecfa05b394ce0791226796ffc18a23649a1d1a96e74ac81f48c966e7"
   },
+  "T02-c0d-codex-result-TEMPLATE.md": {
+    "bytes": 1037,
+    "sha256": "25dc1f10a933499878045eef766891c65a4699ae8c49f0cbc3c1c340d419e8ab"
+  },
+  "bind-c0d-result.py": {
+    "bytes": 5753,
+    "sha256": "1e27ec77770d774641920d750aa6850fa6ee83eec4f971ce22de5bf13c89ce70"
+  },
+  "run-c0d-battery.sh": {
+    "bytes": 9390,
+    "sha256": "81f3327962c16c369a69a141ec8f7d587066fd8a68d6e5d00986b780057f10de"
+  },
   "github-actions/t02-sign-receipt.yml": {
     "bytes": 8452,
     "sha256": "2dfda24bd0a1a355a825484dfacecef250c84a884c953517b5a4afd79c6289ea"
