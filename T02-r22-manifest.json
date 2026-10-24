@@ -92,11 +92,15 @@
     "sha256": "da51e17be9f85daf8281cd28c3d43a4a1648fdfefe5fd287c458b56568a5d4c9"
   },
   "T02-sign-request.json": {
-    "bytes": 668,
-    "sha256": "120da7993950a8d50e4e0240f200db2fb7330c2c80d35d52d4b3ec8918e5c758"
+    "bytes": 715,
+    "sha256": "d9330785a7ee66645fa1b8092775a032b60d75936c7ecfea465cd811912e6344"
   },
   "T02-sign-verdict.md": {
     "bytes": 1735,
     "sha256": "db73a3d8cbaea8069a00be1a391ea3c8dc8e636031d042b1a7d56faf249c47da"
+  },
+  "T02-c0d-codex-result.md": {
+    "bytes": 1795,
+    "sha256": "304e7c8d65edf347f89935cd8226649410b90a7dfd10530e47ce51fff0094700"
   }
 }
