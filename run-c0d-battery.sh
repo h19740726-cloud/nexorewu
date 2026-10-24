@@ -120,6 +120,9 @@ if not pairs or mut_ok != 18 or mut_total != 18:
     problems.append(f"mutation 未達 18/18（彙總 {mut_ok}/{mut_total}，批數 {len(pairs)}）")
 if "正式受驗檔未被寫入（前後 SHA256 相同）：True" not in mut:
     problems.append("mutation 未證明正式受驗檔未被寫入")
+# 突變日誌來源校驗（--skip-mutation 時，日誌必須出自同一顆稽核器 bytes）
+if f"正式受驗檔 SHA256：{audit_before}" not in mut:
+    problems.append(f"mutation 日誌的稽核器 SHA256 不是本輪的 {audit_before[:12]}…（跨版本沿用）")
 
 if audit_before != audit_after:
     problems.append("受驗稽核器在驗證期間被改動")
