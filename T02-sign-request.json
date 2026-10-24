@@ -25,6 +25,7 @@
     "eb46f38833d4",
     "f4f056fa90b9"
   ],
-  "result_path": "T02-sign-verdict.md",
-  "result_sha256": "db73a3d8cbaea8069a00be1a391ea3c8dc8e636031d042b1a7d56faf249c47da"
+  "result_path": "T02-c0d-codex-result.md",
+  "result_sha256": null,
+  "binding": "pending-codex-result"
 }

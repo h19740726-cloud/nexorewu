@@ -28,8 +28,8 @@
     "sha256": "49c14a631a3becea6d6ca5f59bc8ba5ad3c47c2089b67d31c4e8ffa7f27235be"
   },
   "make-sign-request.py": {
-    "bytes": 5093,
-    "sha256": "308dcb7b46fbb1893d8563bd8a262422935d91f5085f9d9f10441985cdddacd2"
+    "bytes": 7384,
+    "sha256": "5def0033f7afadc793332f853ece5dd6d616732e1b145a7283a59a258e646e24"
   },
   "sign-receipt.py": {
     "bytes": 9447,
@@ -80,8 +80,8 @@
     "sha256": "1e27ec77770d774641920d750aa6850fa6ee83eec4f971ce22de5bf13c89ce70"
   },
   "run-c0d-battery.sh": {
-    "bytes": 9390,
-    "sha256": "81f3327962c16c369a69a141ec8f7d587066fd8a68d6e5d00986b780057f10de"
+    "bytes": 10198,
+    "sha256": "ee257faf771a499d196a806703fa87a6200823adc42628faa3081347f9dc17a5"
   },
   "github-actions/t02-sign-receipt.yml": {
     "bytes": 8452,
@@ -92,8 +92,8 @@
     "sha256": "da51e17be9f85daf8281cd28c3d43a4a1648fdfefe5fd287c458b56568a5d4c9"
   },
   "T02-sign-request.json": {
-    "bytes": 689,
-    "sha256": "e868efb65bfbf2f4ffa48013418a3b5bed12261bed4f7cb7a79c0e3119d89098"
+    "bytes": 668,
+    "sha256": "120da7993950a8d50e4e0240f200db2fb7330c2c80d35d52d4b3ec8918e5c758"
   },
   "T02-sign-verdict.md": {
     "bytes": 1735,

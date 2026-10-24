@@ -13,7 +13,13 @@
 #
 # 輸出（全部落在 T02-c0d-evidence/battery/，檔名與出包器 gen-c0d-package.py 對齊）：
 #   suite-123-final.out／test-sign-inputs.out／e2e12.out／repro.out／rehearse.out／mutate-full18.out
-#   battery-meta.json（本輪執行指紋）／pre-freeze.json 或 frozen.json
+#   battery-meta.json（本輪執行指紋）／frozen.json
+#
+# frozen.json 兩種狀態（同一支程式、同一凍結 commit）：
+#   binding=pending-codex-result → 凍結態驗證鏈全綠，但 Codex 獨立結果尚未取得（result_sha256 不存在）
+#   binding=codex-result        → 已用 --result-sha 綁定 Codex 結果（出包器只認這一種）
+#   ⇒ 結果綁定的唯一填值者是 bind-c0d-result.py，來源只能是 Codex 的結果檔；
+#     本腳本拒收 result_path=T02-sign-verdict.md（WorkBuddy 自寫施工材料）。
 #
 # 門檻（缺一即失敗，日誌整批移入 battery-failure/）：
 #   123 tests、30 sign-input、6/6 e2e、5/5 repro、18/18 mutation、稽核器 bytes 不變、
@@ -134,6 +140,8 @@ if audit_sha != audit_before:
 request = json.loads((base / "T02-sign-request.json").read_text(encoding="utf-8"))
 if request.get("version") != audit_sha:
     problems.append("request.version 與稽核器不符")
+if str(request.get("result_path") or "") == "T02-sign-verdict.md":
+    problems.append("request 仍綁 WorkBuddy 自寫 verdict（T02-sign-verdict.md）→ 凍結不成立")
 
 store = json.loads(STORE.read_text(encoding="utf-8"))
 entries = [v for v in store.values() if isinstance(v, dict) and str(v.get("task_id")) == "T02"]
@@ -189,6 +197,7 @@ record = {
     "commit": commit,
     "auditor_sha256": audit_sha,
     "request_path": request.get("result_path"),
+    "request_binding": request.get("binding", "unknown"),
     "request_sha256": sha("T02-sign-request.json"),
     "pending_ids_count": len(ids),
     "pending_cleared": cleared,
@@ -200,11 +209,10 @@ record = {
 if result_sha:
     record["result_sha256"] = result_sha
     record["result_path"] = request.get("result_path")
-    (B / "frozen.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print("[battery] OK — frozen.json 已寫入（已綁 Codex 結果）")
+    record["binding"] = "codex-result"
 else:
     record["binding"] = "pending-codex-result"
-    (B / "pre-freeze.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print("[battery] OK — 測試鏈全綠，pre-freeze.json 已寫入（尚未綁 Codex 結果，不出 frozen.json）")
+(B / "frozen.json").write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+print(f"[battery] OK — frozen.json 已寫入（binding={record['binding']}；commit={commit}）")
 print(json.dumps(record, ensure_ascii=False, indent=2))
 PY

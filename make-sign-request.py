@@ -66,6 +66,11 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--verdict-task", default="T02DEMO", help="示範結果檔的 task_id")
     parser.add_argument("--result-path-declared", default="",
                         help="寫進申請檔的 result_path（預設取 --result 的檔名）")
+    parser.add_argument("--unbound", action="store_true",
+                        help="產生「尚未綁定結果」的申請檔：result_sha256=null、binding=pending-codex-result"
+                             "（唯一合法填值者＝bind-c0d-result.py，來源只能是 Codex 獨立結果）")
+    parser.add_argument("--declared-result", default="T02-c0d-codex-result.md",
+                        help="--unbound 模式下宣告的結果檔名（預設 Codex 結果檔）")
     args = parser.parse_args(argv[1:])
 
     audit_path = pathlib.Path(args.audit)
@@ -83,6 +88,42 @@ def main(argv: list[str]) -> int:
             "task_id": args.verdict_task, "version": version,
             "verdict_sha256": sha256_of(out),
         }, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.unbound:
+        # 未綁定模式：結果檔還不存在（或其 SHA 尚未取得）。
+        # 這裡**不填任何 sha**，避免把 WorkBuddy 自寫的施工材料混充成裁決結果。
+        if not (args.task_id and args.out and args.pending_store):
+            print("--unbound 需要 --task-id／--out／--pending-store", file=sys.stderr)
+            return 2
+        store_path = pathlib.Path(args.pending_store)
+        if not store_path.is_file():
+            print(f"pending 存放區不存在：{store_path}", file=sys.stderr)
+            return 3
+        pending_ids = collect_pending_ids(store_path, args.task_id)
+        if not pending_ids:
+            print(f"目標卡 {args.task_id} 在存放區沒有 pending（清除必須綁定至少一筆）",
+                  file=sys.stderr)
+            return 3
+        declared = args.result_path_declared or args.declared_result
+        if declared == "T02-sign-verdict.md":
+            print("--unbound 不接受 WorkBuddy 自寫 verdict 當宣告對象", file=sys.stderr)
+            return 3
+        request = {
+            "schema": 1,
+            "task_id": args.task_id,
+            "version": audit_sha(audit_path),
+            "pending_ids": pending_ids,
+            "result_path": declared,
+            "result_sha256": None,
+            "binding": "pending-codex-result",
+        }
+        out_path = pathlib.Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(json.dumps(request, ensure_ascii=False, indent=2) + "\n",
+                            encoding="utf-8")
+        print(json.dumps({"ok": True, "unbound": True, "request_path": str(out_path),
+                          **request}, ensure_ascii=False, indent=2))
         return 0
 
     if not (args.task_id and args.result and args.out and args.pending_store):
@@ -111,6 +152,7 @@ def main(argv: list[str]) -> int:
         "pending_ids": pending_ids,
         "result_path": args.result_path_declared or result_path.name,
         "result_sha256": sha256_of(result_path),
+        "binding": "bound",
     }
     out_path = pathlib.Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
