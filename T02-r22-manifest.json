@@ -80,8 +80,8 @@
     "sha256": "1e27ec77770d774641920d750aa6850fa6ee83eec4f971ce22de5bf13c89ce70"
   },
   "run-c0d-battery.sh": {
-    "bytes": 10198,
-    "sha256": "ee257faf771a499d196a806703fa87a6200823adc42628faa3081347f9dc17a5"
+    "bytes": 11426,
+    "sha256": "3e05e59fa07dec67aa73850d1d8966f2818b7efa785196818e76c4032c6af1c6"
   },
   "github-actions/t02-sign-receipt.yml": {
     "bytes": 8452,

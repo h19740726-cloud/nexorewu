@@ -117,13 +117,36 @@ if "5/5 通過" not in read("repro.out"):
 if "18/18 通過" not in read("rehearse.out"):
     problems.append("rehearse 未達 18/18")
 
-# 突變：支援分批（每批尾端一行「精準 k/m」），彙總必須 18/18
+# 突變：**逐組驗證**（每個「=== Mxx_名稱 ===」區塊內必須出現「✅ 精準」，且覆蓋 M1..M18）。
+# 理由：本機以分批執行，環境中斷（exit 137）後同一組會合法重跑，出現同組兩次；
+# 舊的「各批精準相加 == 18」判準會把重跑誤判成不合格（2026-10-25 實例：8 批相加 19/19）。
+# 逐組判準更嚴：任一次執行只要未精準就紅，且 18 組缺一不可；重跑不會被當成達標。
 mut = read("mutate-full18.out")
-pairs = [(int(a), int(b)) for a, b in re.findall(r"精準 (\d+)/(\d+)", mut)]
-mut_ok = sum(a for a, b in pairs)
-mut_total = sum(b for a, b in pairs)
-if not pairs or mut_ok != 18 or mut_total != 18:
-    problems.append(f"mutation 未達 18/18（彙總 {mut_ok}/{mut_total}，批數 {len(pairs)}）")
+blocks, cur = {}, None
+for line in mut.splitlines():
+    m = re.match(r"=== (M\d+)[^=]*===", line.strip())
+    if m:
+        cur = m.group(1)
+        blocks.setdefault(cur, [])
+        continue
+    if cur is not None:
+        blocks[cur].append(line)
+precise, imprecise = set(), []
+for g, body in blocks.items():
+    txt = "\n".join(body)
+    if "✅ 精準" in txt and "❌" not in txt:
+        precise.add(g)
+    else:
+        imprecise.append(g)
+expected = {f"M{i}" for i in range(1, 19)}
+missing = sorted(expected - precise, key=lambda x: int(x[1:]))
+executions = sum(1 for line in mut.splitlines() if re.match(r"=== M\d+", line.strip()))
+if imprecise:
+    problems.append(f"mutation 有組別不精準：{','.join(sorted(imprecise, key=lambda x: int(x[1:])))}")
+if missing:
+    problems.append(f"mutation 未涵蓋：{','.join(missing)}（已精準 {len(precise)}/18）")
+if len(precise) != 18:
+    problems.append(f"mutation 精準組數不是 18（實得 {len(precise)}）")
 if "正式受驗檔未被寫入（前後 SHA256 相同）：True" not in mut:
     problems.append("mutation 未證明正式受驗檔未被寫入")
 # 突變日誌來源校驗（--skip-mutation 時，日誌必須出自同一顆稽核器 bytes）
@@ -177,7 +200,8 @@ meta = {
     "started_finished": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
     "logs": {p.name: {"bytes": p.stat().st_size, "sha256": sha(p)}
              for p in sorted(B.glob("*")) if p.is_file() and p.suffix in {".out"}},
-    "mutation_batches": len(pairs),
+    "mutation_groups_precise": sorted(precise, key=lambda x: int(x[1:])),
+    "mutation_executions": executions,
 }
 
 if problems:
@@ -203,7 +227,8 @@ record = {
     "pending_cleared": cleared,
     "tests": {"suite": "123", "sign_inputs": "30", "e2e": "6/6", "repro": "5/5",
               "rehearse": "18/18", "mutation": "18/18"},
-    "mutation_batches": len(pairs),
+    "mutation_groups_precise": sorted(precise, key=lambda x: int(x[1:])),
+    "mutation_executions": executions,
     "generated_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
 }
 if result_sha:
