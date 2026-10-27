@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; form-action 'none'">
+<meta name="robots" content="noindex, nofollow">
+<title>T02 核准金鑰產生器（離線）</title>
+<style>
+  :root{
+    --bg:#f7f8fa; --card:#ffffff; --line:#dfe3e8; --ink:#1b1f24; --dim:#5b6570;
+    --warn:#b3261e; --warnbg:#fdecea; --ok:#1b6e3c; --okbg:#e8f5ee; --accent:#1a56db;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;padding:20px 16px 48px;background:var(--bg);color:var(--ink);
+       font:16px/1.65 -apple-system,BlinkMacSystemFont,"PingFang TC","Noto Sans TC",sans-serif;
+       -webkit-text-size-adjust:100%}
+  h1{font-size:20px;margin:0 0 6px;letter-spacing:.3px}
+  .sub{color:var(--dim);font-size:14px;margin:0 0 18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin:0 0 14px}
+  .warn{background:var(--warnbg);border-color:#f3c6c1}
+  .warn h2{color:var(--warn);font-size:15px;margin:0 0 8px}
+  ol,ul{margin:8px 0 0;padding-left:22px}
+  li{margin:5px 0}
+  button{font:inherit;border-radius:12px;border:1px solid var(--line);background:#fff;color:var(--ink);
+         padding:14px 18px;min-height:50px;width:100%;cursor:pointer}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+  button.ghost{font-size:14px;min-height:44px}
+  button:disabled{opacity:.45}
+  .row{display:flex;gap:10px;margin-top:10px}
+  .row button{flex:1}
+  .label{font-size:13px;color:var(--dim);margin:14px 0 6px;font-weight:600}
+  pre{margin:0;padding:12px;background:#f2f4f7;border:1px solid var(--line);border-radius:10px;
+      white-space:pre-wrap;word-break:break-all;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+      -webkit-user-select:all;user-select:all}
+  .fp{font:15px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:#eef2ff;border:1px solid #c7d2fe;
+      border-radius:10px;padding:10px 12px;word-break:break-all}
+  .ok{background:var(--okbg);border:1px solid #b7e0c8;color:var(--ok);border-radius:10px;padding:10px 12px;font-size:14px}
+  .bad{background:var(--warnbg);border:1px solid #f3c6c1;color:var(--warn);border-radius:10px;padding:10px 12px;font-size:14px}
+  .muted{color:var(--dim);font-size:13.5px}
+  .hidden{display:none}
+  code{background:#eef1f5;border-radius:5px;padding:1px 5px;font-size:14px}
+  .hint{font-size:13.5px;color:var(--dim);margin-top:8px}
+  .big{font-size:17px}
+</style>
+</head>
+<body>
+
+<h1>T02 核准金鑰產生器</h1>
+<p class="sub">離線執行，不連網、不存檔、不上傳。關掉這一頁，金鑰就從記憶體消失。</p>
+
+<div class="card warn">
+  <h2>先看這三條，再看下面的按鈕</h2>
+  <ol>
+    <li><b>這一頁只能在手機／平板／另一台電腦開。</b>在 Mac 上開，頁面會自己鎖住不給按，因為在那台機器產生的金鑰，等於沒有解決「產出者也讀得到」的問題。</li>
+    <li><b>私鑰只貼進 GitHub 的 secret 欄位，不要貼給任何人</b>（包括我）。貼完就按最下面的「清空畫面」。</li>
+    <li>你只需要把<b>公鑰</b>（或上面那串指紋）給我。公鑰外流沒有關係，私鑰外流等於整條核准鏈作廢。</li>
+  </ol>
+</div>
+
+<div class="card" id="gateCard">
+  <div id="envState" class="muted">檢查執行環境…</div>
+</div>
+
+<div class="card hidden" id="workCard">
+  <button class="primary" id="genBtn">產生一組新金鑰</button>
+  <div class="hint" id="genHint">按一次就好。產生後請立刻往下看「私鑰」那一格。</div>
+
+  <div id="out" class="hidden">
+    <div class="label">指紋（貼給我這串就夠我核對）</div>
+    <div class="fp" id="fp">—</div>
+
+    <div class="label">① 公鑰（可以公開，貼給我就行）</div>
+    <pre id="pub">—</pre>
+    <div class="row">
+      <button class="ghost" data-copy="pub">複製公鑰</button>
+    </div>
+
+    <div class="label">② 私鑰（只貼進 GitHub secret，別貼給任何人）</div>
+    <pre id="priv">—</pre>
+    <div class="row">
+      <button class="ghost" data-copy="priv">複製私鑰</button>
+    </div>
+
+    <div class="label">自我檢查（金鑰產完當場驗一次）</div>
+    <div id="selftest" class="muted">—</div>
+
+    <div class="row">
+      <button class="ghost" id="clearBtn">貼完了，清空畫面</button>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="label" style="margin-top:0">貼進 GitHub 的位置（三個步驟）</div>
+  <ol class="big">
+    <li>開 <code>github.com/h19740726-cloud/nexorewu/settings/environments</code> → <b>New environment</b> → 名稱打 <code>t02-approval</code>。</li>
+    <li>在同一頁勾 <b>Required reviewers</b> 選 <code>h19840726workb</code>，把 <b>Prevent self-review</b> 打開；再到 <b>Environment secrets</b> 新增 <code>T02_APPROVAL_KEY</code>，貼上②的私鑰全文（含 BEGIN／END 兩行）。</li>
+    <li>開 <code>github.com/h19740726-cloud/nexorewu/new/main/.github/workflows</code>，檔名 <code>t02-approval.yml</code>，內容貼上我放在 <code>work/codex/staging/t02-approval.yml</code> 的全文。</li>
+  </ol>
+  <p class="hint">做完回我一句「建好了」，再把指紋貼給我。剩下的我全自動。</p>
+</div>
+
+<div class="card">
+  <div class="label" style="margin-top:0">如果這一頁開不起來（例如手機只給你看文字）</div>
+  <p class="muted">改用任何一台別台電腦的終端機，兩行貼上就跑完：</p>
+  <pre>openssl ecparam -genkey -name prime256v1 -noout -out t02-approval-key.pem
+openssl ec -in t02-approval-key.pem -pubout -out t02-approval-pub.pem</pre>
+  <p class="muted" style="margin-top:10px">私鑰在 <code>t02-approval-key.pem</code>（貼進 GitHub secret 後刪掉），公鑰在 <code>t02-approval-pub.pem</code>（貼給我）。兩行都要在同一台機器、同一個資料夾跑。</p>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var state = { pub: "", priv: "" };
+
+  function pemOf(buf, label) {
+    var b64 = btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+    var lines = b64.match(/.{1,64}/g).join("\n");
+    return "-----BEGIN " + label + "-----\n" + lines + "\n-----END " + label + "-----\n";
+  }
+
+  function normalize(pem) {
+    return pem.trim().split(/\r?\n/).map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length > 0; }).join("\n");
+  }
+
+  function toHex(buf) {
+    return Array.prototype.map.call(new Uint8Array(buf), function (b) {
+      return b.toString(16).padStart(2, "0");
+    }).join("");
+  }
+
+  // 指紋演算法與受驗稽核器 pubkey_fingerprint 相同：正規化公鑰 PEM 的 SHA-256 前 16 位
+  async function fingerprint(publicPem) {
+    var digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalize(publicPem)));
+    return toHex(digest).slice(0, 16);
+  }
+
+  // 桌機 Mac 上按等於白做：iPadOS 會自報 Macintosh，但它有觸控點（實機 5 點），桌機 0 點。
+  function isDesktopMac() {
+    var ua = navigator.userAgent || "";
+    var touch = navigator.maxTouchPoints || 0;
+    return /Macintosh/.test(ua) && touch === 0;
+  }
+
+  function hasSubtle() {
+    return !!(window.crypto && window.crypto.subtle && window.crypto.subtle.generateKey);
+  }
+
+  function boot() {
+    var env = $("envState");
+    if (!hasSubtle()) {
+      env.className = "bad";
+      env.textContent = "這個瀏覽器沒有提供金鑰功能（crypto.subtle 不可用），請改用下面「如果這一頁開不起來」的兩行指令。";
+      return;
+    }
+    if (isDesktopMac()) {
+      env.className = "bad";
+      env.innerHTML = "已鎖住：這一頁是在桌上型 Mac 上開的。<br>在這個環境產生的私鑰，和產出者同一台機器，<b>不算獨立</b>，Codex 會判不符合。<br>請改用手機／平板／別台電腦開這個檔案，或直接用下面那兩行指令在別台機器產生。";
+      return;
+    }
+    env.className = "ok";
+    env.textContent = "環境可用：" + (window.isSecureContext ? "安全上下文成立" : "非安全上下文（可能無法運作）") + "，WebCrypto 可用。";
+    $("workCard").className = "card";
+  }
+
+  async function generate() {
+    var btn = $("genBtn");
+    btn.disabled = true;
+    btn.textContent = "產生中…";
+    try {
+      var kp = await crypto.subtle.generateKey(
+        { name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]
+      );
+      var pkcs8 = await crypto.subtle.exportKey("pkcs8", kp.privateKey);
+      var spki = await crypto.subtle.exportKey("spki", kp.publicKey);
+      state.priv = pemOf(pkcs8, "PRIVATE KEY");
+      state.pub = pemOf(spki, "PUBLIC KEY");
+
+      $("pub").textContent = state.pub;
+      $("priv").textContent = state.priv;
+      $("fp").textContent = await fingerprint(state.pub);
+      $("out").className = "";
+
+      // 自我檢查：用剛產生的金鑰簽一段固定訊息，再用公鑰驗回來
+      var msg = new TextEncoder().encode("T02-keygen-selftest");
+      var sig = await crypto.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, kp.privateKey, msg);
+      var ok = await crypto.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, kp.publicKey, sig, msg);
+      $("selftest").className = ok ? "ok" : "bad";
+      $("selftest").textContent = ok
+        ? "自我檢查通過：這把金鑰能簽也能驗（ECDSA P-256 / SHA-256）。"
+        : "自我檢查失敗，請按一次「清空畫面」重新產生。";
+
+      btn.textContent = "重新產生一組（會蓋掉上面這組）";
+      btn.disabled = false;
+    } catch (err) {
+      $("selftest").className = "bad";
+      $("selftest").textContent = "產生失敗：" + (err && err.message ? err.message : String(err));
+      btn.textContent = "再試一次";
+      btn.disabled = false;
+    }
+  }
+
+  function copyFrom(id, btn) {
+    var text = (id === "pub" ? state.pub : state.priv);
+    if (!text) { return; }
+    var done = function () {
+      var old = btn.textContent;
+      btn.textContent = "已複製";
+      setTimeout(function () { btn.textContent = old; }, 1600);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, fallback);
+    } else {
+      fallback();
+    }
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); done(); } catch (e) { /* 使用者自行長按選取 */ }
+      document.body.removeChild(ta);
+    }
+  }
+
+  function clearAll() {
+    state.pub = "";
+    state.priv = "";
+    $("pub").textContent = "—";
+    $("priv").textContent = "—";
+    $("fp").textContent = "—";
+    $("selftest").className = "muted";
+    $("selftest").textContent = "—";
+    $("out").className = "hidden";
+    $("genBtn").textContent = "產生一組新金鑰";
+    $("genBtn").disabled = false;
+    // 清掉可能留在記憶體裡的參照
+    if (window.gc) { try { window.gc(); } catch (e) {} }
+  }
+
+  $("genBtn").addEventListener("click", generate);
+  $("clearBtn").addEventListener("click", clearAll);
+  Array.prototype.forEach.call(document.querySelectorAll("[data-copy]"), function (b) {
+    b.addEventListener("click", function () { copyFrom(b.getAttribute("data-copy"), b); });
+  });
+
+  boot();
+})();
+</script>
+</body>
+</html>
